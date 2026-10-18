@@ -110,9 +110,26 @@ final class Library {
     var error: String?
     var query = ""
     var columns = 3
+    var galleryStyle = "waterfall"
+    var onlyFavorites = false
+    var customScripts = (UserDefaults.standard.stringArray(forKey: "customScripts") ?? []).map { URL(fileURLWithPath: $0) }
     var showInfo = false
     var pinned = false
-    var autoSize = true
+    var showSettings = false
+    var autoHideToolbar = UserDefaults.standard.object(forKey: "autoHideToolbar") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(autoHideToolbar, forKey: "autoHideToolbar") }
+    }
+    var animatePhotos = UserDefaults.standard.object(forKey: "animatePhotos") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(animatePhotos, forKey: "animatePhotos") }
+    }
+    var glassControls = UserDefaults.standard.object(forKey: "glassControls") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(glassControls, forKey: "glassControls") }
+    }
+    var copiedPhotos = UserDefaults.standard.dictionary(forKey: "copiedPhotos") as? [String: String] ?? [:]
+    var clipboardPhoto: URL?
+    var autoSize = UserDefaults.standard.object(forKey: "autoSize") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(autoSize, forKey: "autoSize") }
+    }
     var showNavigation = false
     var destinations: [URL] = (UserDefaults.standard.stringArray(forKey: "destinations") ?? []).map { URL(fileURLWithPath: $0) }
     var favorites: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "favorites") ?? [])
@@ -121,7 +138,7 @@ final class Library {
     var zoomCommand = 0
     var zoomAction = "fit"
     private var request = UUID()
-    var filtered: [Photo] { photos.filter { query.isEmpty || $0.url.lastPathComponent.localizedCaseInsensitiveContains(query) } }
+    var filtered: [Photo] { photos.filter { (query.isEmpty || $0.url.lastPathComponent.localizedCaseInsensitiveContains(query)) && (!onlyFavorites || favorites.contains($0.url.path)) } }
     var current: Photo? { photos.first { $0.url == selected } }
     var position: String {
         guard let index = filtered.firstIndex(where: { $0.url == selected }) else { return "\(filtered.count) 张照片" }
@@ -171,7 +188,11 @@ final class Library {
     func move(_ delta: Int) {
         let items = filtered
         guard !items.isEmpty else { return }
-        let index = items.firstIndex(where: { $0.url == selected }) ?? 0
+        guard let index = items.firstIndex(where: { $0.url == selected }) else {
+            selected = delta >= 0 ? items.first?.url : items.last?.url
+            rotation = 0
+            return
+        }
         selected = items[min(max(index + delta, 0), items.count - 1)].url
         rotation = 0
     }
@@ -201,6 +222,44 @@ final class Library {
         guard let path = current?.url.path else { return }
         if favorites.contains(path) { favorites.remove(path) } else { favorites.insert(path) }
         UserDefaults.standard.set(Array(favorites), forKey: "favorites")
+    }
+
+    func addCustomScript() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = false
+        panel.allowedContentTypes = [UTType(filenameExtension: "sh") ?? .data]
+        panel.message = "选择你信任的 shell 脚本。执行时会将当前图片路径作为第一个参数，每次运行前需要确认。"
+        guard panel.runModal() == .OK, let script = panel.url else { return }
+        if !customScripts.contains(script) { customScripts.append(script) }
+        UserDefaults.standard.set(customScripts.map(\.path), forKey: "customScripts")
+    }
+
+    func runCustomScript(_ script: URL) {
+        guard let photo = current, !busy else { return }
+        let alert = NSAlert()
+        alert.messageText = "运行自定义脚本？"
+        alert.informativeText = "脚本：\(script.path)\n图片：\(photo.url.path)\n脚本可修改文件或访问网络，请仅运行你信任的脚本。"
+        alert.addButton(withTitle: "运行")
+        alert.addButton(withTitle: "取消")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        busy = true
+        Task {
+            do {
+                let result = try await Task.detached {
+                    let process = Process()
+                    process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+                    process.arguments = [script.path, photo.url.path]
+                    process.standardOutput = FileHandle.nullDevice
+                    process.standardError = FileHandle.nullDevice
+                    try process.run()
+                    process.waitUntilExit()
+                    return process.terminationStatus
+                }.value
+                if result == 0 { fileStatus = "脚本运行完成" }
+                else { error = "脚本退出状态：\(result)" }
+            } catch { self.error = error.localizedDescription }
+            busy = false
+        }
     }
 
     func addDestination() {
@@ -243,6 +302,7 @@ final class Library {
         guard let photo = photo ?? current else { return }
         NSPasteboard.general.clearContents()
         if NSPasteboard.general.writeObjects([photo.url as NSURL]) {
+            clipboardPhoto = photo.url
             fileStatus = "已拷贝，可在 Finder 中粘贴"
         }
     }
@@ -270,6 +330,10 @@ final class Library {
                 _ = try await Task.detached(priority: .userInitiated) {
                     try PhotoFileOperation.transfer(photo.url, to: folder, move: move)
                 }.value
+                if !move {
+                    copiedPhotos[photo.url.path] = folder.path
+                    UserDefaults.standard.set(copiedPhotos, forKey: "copiedPhotos")
+                }
                 guard request == token else { return }
                 if move, let index = photos.firstIndex(where: { $0.url == photo.url }) {
                     photos.remove(at: index)

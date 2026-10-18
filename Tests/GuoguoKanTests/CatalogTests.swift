@@ -4,6 +4,37 @@ import UniformTypeIdentifiers
 @testable import GuoguoKan
 
 final class CatalogTests: XCTestCase {
+    @MainActor func testNavigationHonorsFilterAndResetsRotation() async throws {
+        let folder = try fixtureFolder()
+        try makeImage(folder.appendingPathComponent("first.tiff"))
+        try makeImage(folder.appendingPathComponent("second.tiff"))
+        let library = Library()
+        library.photos = try Catalog.scan([folder])
+        library.selected = library.photos[0].url
+        library.query = "second"
+        library.rotation = 90
+        library.move(1)
+        XCTAssertEqual(library.current?.url.lastPathComponent, "second.tiff")
+        XCTAssertEqual(library.rotation, 0)
+        library.move(1)
+        XCTAssertEqual(library.current?.url.lastPathComponent, "second.tiff")
+    }
+
+    @MainActor func testFavoriteFilterDoesNotChangeSourceCatalog() async throws {
+        let folder = try fixtureFolder()
+        try makeImage(folder.appendingPathComponent("first.tiff"))
+        try makeImage(folder.appendingPathComponent("second.tiff"))
+        let library = Library()
+        library.photos = try Catalog.scan([folder])
+        let chosen = library.photos[1].url
+        library.favorites = [chosen.path]
+        library.onlyFavorites = true
+        XCTAssertEqual(library.filtered.map(\.url), [chosen])
+        XCTAssertEqual(library.photos.count, 2)
+        library.onlyFavorites = false
+        XCTAssertEqual(library.filtered.count, 2)
+    }
+
     func testPortraitWindowFitsScreenWithoutWideLetterboxing() {
         let size = ImageWindowGeometry.contentSize(image: CGSize(width: 1320, height: 2868), available: CGSize(width: 1400, height: 850), scale: 2, sidebar: 0)
         XCTAssertEqual(size.height, 850, accuracy: 0.01)

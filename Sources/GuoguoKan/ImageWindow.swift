@@ -11,6 +11,7 @@ enum ImageWindowGeometry {
 }
 struct ImageWindowConfiguration: NSViewRepresentable {
     @Bindable var library: Library
+    let controlsVisible: Bool
     final class Coordinator {
         var key = ""
     }
@@ -29,12 +30,15 @@ struct ImageWindowConfiguration: NSViewRepresentable {
             guard let window = view.window else { return }
             window.level = pinned ? .floating : .normal
             window.title = photo?.url.lastPathComponent ?? "果果看"
+            for type in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+                window.standardWindowButton(type)?.isHidden = !controlsVisible
+            }
             guard key != coordinator.key else { return }
             coordinator.key = key
             guard autoSize, !gallery, let photo, !window.styleMask.contains(.fullScreen),
                   let screen = window.screen else { return }
             let visible = screen.visibleFrame.insetBy(dx: 12, dy: 12)
-            let chrome = window.frame.height - window.contentLayoutRect.height + 28
+            let chrome: CGFloat = 0
             let swapped = rotation == 90 || rotation == 270
             let image = CGSize(width: swapped ? photo.height : photo.width, height: swapped ? photo.width : photo.height)
             let size = ImageWindowGeometry.contentSize(image: image,

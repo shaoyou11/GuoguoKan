@@ -16,11 +16,13 @@ struct Canvas: NSViewRepresentable {
     let rotation: Int
     let command: Int
     let action: String
+    let animatePhotos: Bool
     var navigate: (Int) -> Void
     var navigateFolder: (Int) -> Void
 
     func makeNSView(context: Context) -> PhotoScrollView {
         let view = PhotoScrollView()
+        view.animatePhotos = animatePhotos
         view.navigate = navigate
         view.navigateFolder = navigateFolder
         view.load(photo)
@@ -30,6 +32,7 @@ struct Canvas: NSViewRepresentable {
         view.navigate = navigate
         view.navigateFolder = navigateFolder
         if view.loadedURL != photo.url { view.load(photo) }
+        view.animatePhotos = animatePhotos
         if view.rotation != rotation { view.rotation = rotation; view.render() }
         if view.lastCommand != command { view.lastCommand = command; view.apply(action) }
     }
@@ -53,6 +56,7 @@ final class PhotoScrollView: NSScrollView {
     var navigateFolder: ((Int) -> Void)?
     var rotation = 0
     var lastCommand = 0
+    var animatePhotos = true
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -85,17 +89,25 @@ final class PhotoScrollView: NSScrollView {
 
     func load(_ photo: Photo) {
         loadedURL = photo.url
-        decoded = nil
-        picture.image = nil
-        status.stringValue = "正在加载…"
+        status.stringValue = picture.image == nil ? "正在加载…" : ""
         originalSize = NSSize(width: photo.width, height: photo.height)
         task?.cancel()
         task = Task { [weak self] in
             let image = await ImageLoader.shared.image(photo.url, pixels: min(8192, max(photo.width, photo.height)))
             guard !Task.isCancelled, let self else { return }
+            let transition = decoded != nil && animatePhotos && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
             decoded = image
             status.stringValue = image == nil ? "这张图片无法解码" : ""
+            if image == nil { picture.image = nil }
             render()
+            if transition, image != nil {
+                picture.wantsLayer = true
+                let fade = CATransition()
+                fade.type = .fade
+                fade.duration = 0.18
+                fade.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                picture.layer?.add(fade, forKey: "photoTransition")
+            }
         }
     }
 
