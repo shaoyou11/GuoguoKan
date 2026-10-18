@@ -1,4 +1,5 @@
 import XCTest
+import AppKit
 import ImageIO
 import UniformTypeIdentifiers
 @testable import GuoguoKan
@@ -106,6 +107,17 @@ final class CatalogTests: XCTestCase {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("GuoguoKanTests-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         return folder
+    }
+
+    @MainActor
+    func testRestoredLaunchDoesNotLeaveWelcomeHidden() async throws {
+        let delegate = AppDelegate()
+        delegate.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification, userInfo: [NSApplication.launchIsDefaultUserInfoKey: false]))
+        for _ in 0..<20 {
+            if !delegate.library.launching { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertFalse(delegate.library.launching)
     }
 
     @MainActor

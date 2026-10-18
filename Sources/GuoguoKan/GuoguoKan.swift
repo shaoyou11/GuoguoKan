@@ -5,7 +5,7 @@ import SwiftUI
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let library = Library()
     func applicationDidFinishLaunching(_ notification: Notification) {
-        if notification.userInfo?[NSApplication.launchIsDefaultUserInfoKey] as? Bool == true {
+        DispatchQueue.main.async { [self] in
             library.launching = false
         }
     }
