@@ -174,15 +174,16 @@ struct Viewer: View {
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) {
+            HStack(spacing: 0) {
+                WindowButtons().frame(width: 78, height: 36)
             ScrollView(.horizontal, showsIndicators: false) {
                 compactToolbar
                     .labelStyle(.iconOnly).buttonStyle(.plain).controlSize(.small)
                     .padding(.horizontal, 8)
             }
-            .padding(.leading, 78)
+            }
             .frame(height: 36)
             .background(.bar)
-            .overlay(alignment: .leading) { WindowButtons().frame(width: 78, height: 36) }
         }
         .ignoresSafeArea(.container, edges: .top)
         .toolbarVisibility(.hidden, for: .windowToolbar)
