@@ -60,6 +60,8 @@ struct ViewerSettings: View {
             }
             Form {
                 Section("看图") {
+                    Toggle("关闭窗口后在后台待命", isOn: $library.keepInBackground)
+                    Text("再次打开图片时直接看图；⌘Q 可完全退出。").font(.caption).foregroundStyle(.secondary)
                     Toggle("自动隐藏顶部工具栏", isOn: $library.autoHideToolbar)
                     Text("鼠标移到顶边显示，离开后自动收起，不改变图片位置。").font(.caption).foregroundStyle(.secondary)
                     Toggle("切换图片时淡入", isOn: $library.animatePhotos)

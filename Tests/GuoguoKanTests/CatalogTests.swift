@@ -161,24 +161,31 @@ final class CatalogTests: XCTestCase {
     }
 
     @MainActor
-    func testRestoredLaunchDoesNotLeaveWelcomeHidden() async throws {
+    func testDefaultLaunchRequestsWelcomeWindow() async throws {
         let delegate = AppDelegate()
-        delegate.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification, userInfo: [NSApplication.launchIsDefaultUserInfoKey: false]))
-        XCTAssertTrue(delegate.library.launching)
-        _ = delegate.applicationShouldOpenUntitledFile(NSApplication.shared)
+        delegate.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification, userInfo: [NSApplication.launchIsDefaultUserInfoKey: true]))
         for _ in 0..<20 {
             if !delegate.library.launching { break }
             try await Task.sleep(for: .milliseconds(10))
         }
         XCTAssertFalse(delegate.library.launching)
+        XCTAssertEqual(delegate.library.windowPresentation, 1)
     }
 
     @MainActor
     func testDocumentLaunchWaitsForFileEvent() async throws {
         let delegate = AppDelegate()
+        var presentedURLs: [URL] = []
+        delegate.library.presentWindowAction = { [weak library = delegate.library] in
+            guard let photo = library?.current else { XCTFail("文件启动不应展示空欢迎页"); return }
+            XCTAssertNotNil(ImageLoader.shared.cached(photo.url, pixels: min(8192, max(photo.width, photo.height))))
+            presentedURLs.append(photo.url)
+        }
         delegate.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification, userInfo: [NSApplication.launchIsDefaultUserInfoKey: false]))
+        XCTAssertFalse(delegate.applicationShouldOpenUntitledFile(NSApplication.shared))
         try await Task.sleep(for: .milliseconds(30))
         XCTAssertTrue(delegate.library.launching)
+        XCTAssertEqual(delegate.library.windowPresentation, 0)
         let folder = try fixtureFolder()
         let url = folder.appendingPathComponent("launch.tiff")
         try makeImage(url)
@@ -186,11 +193,38 @@ final class CatalogTests: XCTestCase {
         XCTAssertFalse(delegate.library.launching)
         XCTAssertTrue(delegate.library.busy)
         XCTAssertFalse(delegate.library.gallery)
+        XCTAssertEqual(delegate.library.windowPresentation, 0)
         for _ in 0..<200 {
             if !delegate.library.busy { break }
             try await Task.sleep(for: .milliseconds(10))
         }
         XCTAssertEqual(delegate.library.current?.url, url.resolvingSymlinksInPath())
+        XCTAssertEqual(delegate.library.windowPresentation, 1)
+        XCTAssertEqual(presentedURLs, [url.resolvingSymlinksInPath()])
+        let photo = try XCTUnwrap(delegate.library.current)
+        XCTAssertNotNil(ImageLoader.shared.cached(photo.url, pixels: min(8192, max(photo.width, photo.height))))
+    }
+
+    @MainActor
+    func testSupersededOpenDoesNotPresentOldWindow() async throws {
+        let folder = try fixtureFolder()
+        let first = folder.appendingPathComponent("first.tiff")
+        let second = folder.appendingPathComponent("second.tiff")
+        try makeImage(first)
+        try makeImage(second)
+        let library = Library()
+        var presentedURLs: [URL] = []
+        library.presentWindowAction = { [weak library] in
+            if let url = library?.current?.url { presentedURLs.append(url) }
+        }
+        library.open([first])
+        library.open([second])
+        for _ in 0..<200 {
+            if !library.busy { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(presentedURLs, [second.resolvingSymlinksInPath()])
+        XCTAssertEqual(library.current?.url, second.resolvingSymlinksInPath())
     }
 
     @MainActor

@@ -130,6 +130,11 @@ final class Library {
     var gallery = true
     var busy = false
     var launching = true
+    var windowPresentation = 0
+    @ObservationIgnored var presentWindowAction: (() -> Void)?
+    var keepInBackground = UserDefaults.standard.object(forKey: "keepInBackground") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(keepInBackground, forKey: "keepInBackground") }
+    }
     var error: String?
     var query = ""
     var columns = 3
@@ -177,6 +182,12 @@ final class Library {
         return "\(index + 1) / \(filtered.count)"
     }
 
+    func presentWindow() {
+        launching = false
+        windowPresentation += 1
+        presentWindowAction?()
+    }
+
     func openPanel() {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
@@ -204,13 +215,19 @@ final class Library {
         gallery = !isSingleImage
         onlyFavorites = false
         Task {
+            var presentedInitial = false
             do {
                 if isSingleImage {
                     let initial = try await Task.detached(priority: .userInitiated) { try Catalog.scan([first]) }.value
                     guard request == token else { return }
+                    if let photo = initial.first {
+                        _ = await ImageLoader.shared.image(photo.url, pixels: min(8192, max(photo.width, photo.height)))
+                        guard request == token else { return }
+                    }
                     photos = initial
                     selected = initial.first?.url
                     rotation = 0
+                    if !initial.isEmpty { presentWindow(); presentedInitial = true }
                 }
                 let found = try await Task.detached(priority: .userInitiated) { try Catalog.scan(inputs) }.value
                 guard request == token else { return }
@@ -219,12 +236,14 @@ final class Library {
                 gallery = !isSingleImage
                 rotation = 0
                 busy = false
+                if !presentedInitial { presentWindow() }
                 if found.isEmpty { error = "没有找到可读取的图片。请选择图片或直接包含图片的文件夹。" }
                 NSDocumentController.shared.noteNewRecentDocumentURL(first)
             } catch {
                 guard request == token else { return }
                 busy = false
                 self.error = "无法打开：\(error.localizedDescription)"
+                presentWindow()
             }
         }
     }

@@ -5,23 +5,44 @@ import SwiftUI
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let library = Library()
     private var shortcutMonitor: Any?
+    private var viewerWindow: NSWindow?
     func applicationWillFinishLaunching(_ notification: Notification) {
-        NSAppleEventManager.shared().setEventHandler(self, andSelector: #selector(openApplication(_:reply:)), forEventClass: AEEventClass(kCoreEventClass), andEventID: AEEventID(kAEOpenApplication))
+        library.presentWindowAction = { [weak self] in self?.showViewerWindow() }
         if let path = Bundle.main.path(forResource: "AppIcon", ofType: "icns"), let icon = NSImage(contentsOfFile: path) {
             NSApp.applicationIconImage = icon
         }
     }
-    @objc func openApplication(_ event: NSAppleEventDescriptor, reply: NSAppleEventDescriptor) {
-        library.launching = false
+    private func showViewerWindow() {
+        if viewerWindow == nil {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 880, height: 580), styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: true)
+            window.identifier = NSUserInterfaceItemIdentifier("viewer")
+            window.titleVisibility = .hidden
+            window.titlebarAppearsTransparent = true
+            window.isReleasedWhenClosed = false
+            window.isRestorable = false
+            window.tabbingMode = .disallowed
+            window.contentMinSize = NSSize(width: 240, height: 200)
+            window.contentView = NSHostingView(rootView: Viewer(library: library).frame(minWidth: 240, minHeight: 200))
+            window.center()
+            viewerWindow = window
+        }
+        let presentation = library.windowPresentation
+        DispatchQueue.main.async { [weak self] in
+            guard let self, library.windowPresentation == presentation, let window = viewerWindow else { return }
+            window.contentView?.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            if window.isMiniaturized { window.deminiaturize(nil) }
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate()
+        }
     }
     func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool {
-        library.launching = false
-        return true
+        false
     }
     func applicationDidFinishLaunching(_ notification: Notification) {
         DispatchQueue.main.async { [self] in
             if notification.userInfo?[NSApplication.launchIsDefaultUserInfoKey] as? Bool == true {
-                library.launching = false
+                library.presentWindow()
             }
             if Bundle.main.bundleIdentifier == "com.shaoyou11.guoguokan" {
                 _ = UpdateManager.shared
@@ -46,27 +67,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        library.launching = false
-        return true
+        library.presentWindow()
+        return false
     }
     func application(_ sender: NSApplication, open urls: [URL]) { library.open(urls) }
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { !library.keepInBackground }
 }
 
 @main
 struct GuoguoKanApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     var body: some Scene {
-        Window("果果看", id: "viewer") {
-            Viewer(library: delegate.library)
-                .frame(minWidth: 240, minHeight: 200)
-                .containerBackground(.clear, for: .window)
+        Settings {
+            ViewerSettings(library: delegate.library)
         }
-        .defaultSize(width: 1180, height: 780)
-        .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(replacing: .appSettings) {
-                Button("设置…") { delegate.library.showSettings = true }.keyboardShortcut(",")
+                Button("设置…") { delegate.library.presentWindow(); delegate.library.showSettings = true }.keyboardShortcut(",")
             }
             CommandGroup(after: .appInfo) {
                 Button("检查更新…") { UpdateManager.shared.check() }
@@ -317,10 +334,13 @@ struct Viewer: View {
     private var empty: some View {
         VStack(spacing: 18) {
             Image(nsImage: NSApp.applicationIconImage).resizable().scaledToFit().frame(width: 72, height: 72)
-            Text("果果看").font(.system(size: 26, weight: .medium)).foregroundStyle(.primary.opacity(0.8))
+            Text("果果看").font(.system(size: 24, weight: .medium)).foregroundStyle(.primary)
             Text("打开图片，开始浏览。").font(.system(size: 13)).foregroundStyle(.secondary)
-            Button("打开图片或文件夹…", systemImage: "folder", action: library.openPanel).buttonStyle(.glassProminent).tint(.primary.opacity(0.78)).controlSize(.large).padding(.top, 8)
-            Text("也可以将文件拖到这里  ·  ⌘O 打开").font(.callout).foregroundStyle(.tertiary)
+            Button(action: library.openPanel) {
+                Label("打开图片或文件夹", systemImage: "folder")
+                    .font(.system(size: 14, weight: .medium)).padding(.horizontal, 6)
+            }.buttonStyle(.glassProminent).tint(.blue).foregroundStyle(.white).controlSize(.large).padding(.top, 8)
+            Text("拖入图片或文件夹  ·  ⌘O 打开").font(.system(size: 11)).foregroundStyle(.secondary)
         }
         .padding(36)
         .padding(32)
