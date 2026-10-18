@@ -17,6 +17,8 @@ struct Canvas: NSViewRepresentable {
     let command: Int
     let action: String
     let animatePhotos: Bool
+    let resizeWindowOnZoom: Bool
+    var reportZoom: (String) -> Void
     var navigate: (Int) -> Void
     var navigateFolder: (Int) -> Void
 
@@ -24,15 +26,20 @@ struct Canvas: NSViewRepresentable {
         let view = PhotoScrollView()
         view.animatePhotos = animatePhotos
         view.rotation = rotation
+        view.resizeWindowOnZoom = resizeWindowOnZoom
+        view.lastCommand = command
+        view.reportZoom = reportZoom
         view.navigate = navigate
         view.navigateFolder = navigateFolder
         view.load(photo)
         return view
     }
     func updateNSView(_ view: PhotoScrollView, context: Context) {
+        view.reportZoom = reportZoom
         view.navigate = navigate
         view.navigateFolder = navigateFolder
         view.animatePhotos = animatePhotos
+        view.resizeWindowOnZoom = resizeWindowOnZoom
         if view.loadedURL != photo.url { view.load(photo) }
         if view.rotation != rotation { view.rotation = rotation; view.render() }
         if view.lastCommand != command { view.lastCommand = command; view.apply(action) }
@@ -45,6 +52,7 @@ final class PhotoScrollView: NSScrollView {
     private let status = NSTextField(labelWithString: "正在加载…")
     private var decoded: CGImage?
     private var task: Task<Void, Never>?
+    private var loadingIndicatorTask: Task<Void, Never>?
     private var originalSize = NSSize(width: 1, height: 1)
     private var fitting = true
     private var lastScrollTime: TimeInterval = 0
@@ -59,6 +67,8 @@ final class PhotoScrollView: NSScrollView {
     var rotation = 0
     var lastCommand = 0
     var animatePhotos = true
+    var resizeWindowOnZoom = false
+    var reportZoom: ((String) -> Void)?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -75,6 +85,7 @@ final class PhotoScrollView: NSScrollView {
         picture.animates = false
         documentView = picture
         status.alignment = .center
+        status.stringValue = ""
         status.textColor = .secondaryLabelColor
         addSubview(status)
         let doubleClick = NSClickGestureRecognizer(target: self, action: #selector(toggleFit))
@@ -96,12 +107,26 @@ final class PhotoScrollView: NSScrollView {
         decoded = nil
         displayedImageURL = nil
         heldMagnification = nil
-        status.stringValue = "正在加载…"
+        loadingIndicatorTask?.cancel()
+        status.stringValue = ""
         originalSize = NSSize(width: photo.width, height: photo.height)
         task?.cancel()
+        let pixels = min(8192, max(photo.width, photo.height))
+        if let cached = ImageLoader.shared.cached(photo.url, pixels: pixels) {
+            decoded = cached
+            displayedImageURL = photo.url
+            render()
+            return
+        }
+        loadingIndicatorTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(450))
+            guard !Task.isCancelled, let self, displayedImageURL == nil, loadedURL == photo.url else { return }
+            status.stringValue = "正在读取图片…"
+        }
         task = Task { [weak self] in
-            let image = await ImageLoader.shared.image(photo.url, pixels: min(8192, max(photo.width, photo.height)))
+            let image = await ImageLoader.shared.image(photo.url, pixels: pixels)
             guard !Task.isCancelled, let self, loadedURL == photo.url else { return }
+            loadingIndicatorTask?.cancel()
             let transition = animatePhotos && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
             decoded = image
             displayedImageURL = image == nil ? nil : photo.url
@@ -164,17 +189,40 @@ final class PhotoScrollView: NSScrollView {
     }
 
     func apply(_ action: String) {
-        if action == "fit" { fit(); return }
+        if action == "fit" { fit(); showZoom(); return }
+        if ["in", "out"].contains(action), fitting, resizeWindowOnZoom,
+           let window, !window.styleMask.contains(.fullScreen), let screen = window.screen {
+            let factor: CGFloat = action == "in" ? 1.2 : 1 / 1.2
+            let available = screen.visibleFrame.insetBy(dx: 12, dy: 12)
+            let size = NSSize(width: window.frame.width * factor, height: window.frame.height * factor)
+            if size.width <= available.width, size.height <= available.height, size.width >= 240, size.height >= 200 {
+                let origin = NSPoint(x: min(max(window.frame.midX - size.width / 2, available.minX), available.maxX - size.width), y: min(max(window.frame.midY - size.height / 2, available.minY), available.maxY - size.height))
+                window.setFrame(NSRect(origin: origin, size: size), display: true)
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    window.contentView?.layoutSubtreeIfNeeded()
+                    fit()
+                    showZoom()
+                }
+                return
+            }
+        }
         fitting = false
         hasVerticalScroller = true
         hasHorizontalScroller = true
         let scale = window?.backingScaleFactor ?? 2
         let fullPixels = rotation == 90 || rotation == 270 ? originalSize.height : originalSize.width
         let actual = fullPixels / max(picture.frame.width, 1) / scale
-        let next = action == "actual" ? actual : magnification * (action == "in" ? 1.25 : 0.8)
+        let next = action == "actual" ? actual : magnification * (action == "in" ? 1.2 : 1 / 1.2)
         setMagnification(min(maxMagnification, max(minMagnification, next)), centeredAt: NSPoint(x: contentView.bounds.midX, y: contentView.bounds.midY))
+        showZoom()
     }
-    override func magnify(with event: NSEvent) { fitting = false; super.magnify(with: event) }
+    private func showZoom() {
+        let pixels = rotation == 90 || rotation == 270 ? originalSize.height : originalSize.width
+        let percentage = magnification * picture.frame.width * (window?.backingScaleFactor ?? 2) / max(pixels, 1) * 100
+        reportZoom?("\(Int(percentage.rounded()))%\(fitting ? " · 适应窗口" : "")")
+    }
+    override func magnify(with event: NSEvent) { fitting = false; super.magnify(with: event); showZoom() }
     override func scrollWheel(with event: NSEvent) {
         if event.modifierFlags.contains(.command) || event.modifierFlags.contains(.shift) {
             if abs(event.scrollingDeltaY) > 0 { apply(event.scrollingDeltaY > 0 ? "in" : "out") }
@@ -203,11 +251,13 @@ final class PhotoScrollView: NSScrollView {
             heldFitting = fitting
             fitting = false
             setMagnification(min(maxMagnification, magnification * 2), centeredAt: recognizer.location(in: picture))
+            showZoom()
         } else if recognizer.state == .ended || recognizer.state == .cancelled || recognizer.state == .failed {
             if let saved = heldMagnification { magnification = saved }
             heldMagnification = nil
             fitting = heldFitting
             if fitting { fit() }
+            showZoom()
         }
     }
     @objc private func toggleFit() { fitting ? apply("actual") : fit() }

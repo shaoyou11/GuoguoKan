@@ -24,7 +24,8 @@ struct ImageWindowConfiguration: NSViewRepresentable {
         let autoSize = library.autoSize
         let rotation = library.rotation
         let sidebar: CGFloat = library.showNavigation ? 126 : 0
-        let key = "\(photo?.url.path ?? "")|\(gallery)|\(rotation)|\(sidebar)|\(autoSize)|\(library.zoomCommand)"
+        let readyForWelcome = photo == nil && !library.busy && !library.launching
+        let key = "\(photo?.url.path ?? "")|\(gallery)|\(rotation)|\(sidebar)|\(autoSize)|\(library.windowFitRequest)|\(readyForWelcome)"
         let coordinator = context.coordinator
         DispatchQueue.main.async {
             guard let window = view.window else { return }
@@ -35,6 +36,11 @@ struct ImageWindowConfiguration: NSViewRepresentable {
             }
             guard key != coordinator.key else { return }
             coordinator.key = key
+            if readyForWelcome, let screen = window.screen, !window.styleMask.contains(.fullScreen) {
+                window.setContentSize(NSSize(width: min(880, screen.visibleFrame.width - 24), height: min(580, screen.visibleFrame.height - 24)))
+                window.center()
+                return
+            }
             guard autoSize, !gallery, let photo, !window.styleMask.contains(.fullScreen),
                   let screen = window.screen else { return }
             let visible = screen.visibleFrame.insetBy(dx: 12, dy: 12)

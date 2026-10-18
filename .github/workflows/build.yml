@@ -54,9 +54,12 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
         run: |
           if gh release view "$GITHUB_REF_NAME" --json tagName > /dev/null 2>&1; then
             echo "版本已存在，保留原发布文件；本次编译包可从 Artifacts 下载。"
             exit 0
           fi
-          gh release create "$GITHUB_REF_NAME" 交付/GuoguoKan-*.zip 交付/SHA256SUMS.txt --verify-tag --title "果果看 $GITHUB_REF_NAME" --notes "Apple Silicon · macOS 27+。自动编译并通过测试。使用 ad-hoc 签名，尚未完成 Developer ID 公证。"
+          test -n "$SPARKLE_PRIVATE_KEY"
+          python3 Scripts/make_appcast.py
+          gh release create "$GITHUB_REF_NAME" 交付/GuoguoKan-*.zip 交付/SHA256SUMS.txt 交付/appcast.xml --verify-tag --latest --title "果果看 $GITHUB_REF_NAME" --notes "Apple Silicon · macOS 27+。自动编译并通过测试，包含签名应用内更新。使用 ad-hoc 签名，尚未完成 Developer ID 公证。"

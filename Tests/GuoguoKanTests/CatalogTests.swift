@@ -110,6 +110,55 @@ final class CatalogTests: XCTestCase {
     }
 
     @MainActor
+    func testRecordedShortcutsRejectConflictsAndPersist() async {
+        let saved = UserDefaults.standard.object(forKey: "recordedShortcuts")
+        defer { UserDefaults.standard.set(saved, forKey: "recordedShortcuts") }
+        let library = Library()
+        library.recordedShortcuts = [:]
+        let folder = URL(fileURLWithPath: "/tmp/recording-test")
+        let reserved = RecordedShortcut(key: "c", modifiers: NSEvent.ModifierFlags.command.rawValue)
+        XCTAssertFalse(library.recordShortcut(reserved, folder: folder, move: false))
+        let valid = RecordedShortcut(key: "k", modifiers: NSEvent.ModifierFlags([.control, .option]).rawValue)
+        XCTAssertTrue(library.recordShortcut(valid, folder: folder, move: false))
+        XCTAssertFalse(library.recordShortcut(valid, folder: folder, move: true))
+        XCTAssertNotNil(library.shortcutError)
+        XCTAssertEqual(RecordedShortcut.read()[RecordedShortcut.identifier(folder, move: false)], valid)
+        XCTAssertTrue(library.recordShortcut(nil, folder: folder, move: false))
+        XCTAssertTrue(library.recordShortcut(valid, folder: folder, move: true))
+        XCTAssertNil(library.shortcutError)
+    }
+
+    @MainActor
+    func testCachedImageDisplaysSynchronously() async throws {
+        let folder = try fixtureFolder()
+        let url = folder.appendingPathComponent("cached.tiff")
+        try makeImage(url)
+        let photo = try XCTUnwrap(Catalog.scan([url]).first)
+        _ = await ImageLoader.shared.image(photo.url, pixels: max(photo.width, photo.height))
+        let view = PhotoScrollView()
+        view.load(photo)
+        XCTAssertEqual(view.displayedImageURL, photo.url)
+    }
+
+    @MainActor
+    func testEscapeClosesOverlaysFirst() async {
+        let library = Library()
+        library.showSettings = true
+        library.showInfo = true
+        library.exitViewing()
+        XCTAssertFalse(library.showSettings)
+        XCTAssertTrue(library.showInfo)
+        library.exitViewing()
+        XCTAssertFalse(library.showInfo)
+        library.gallery = false
+        library.selected = URL(fileURLWithPath: "/tmp/example.png")
+        library.exitViewing()
+        XCTAssertTrue(library.gallery)
+        XCTAssertNil(library.selected)
+        XCTAssertTrue(library.photos.isEmpty)
+    }
+
+    @MainActor
     func testRestoredLaunchDoesNotLeaveWelcomeHidden() async throws {
         let delegate = AppDelegate()
         delegate.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification, userInfo: [NSApplication.launchIsDefaultUserInfoKey: false]))

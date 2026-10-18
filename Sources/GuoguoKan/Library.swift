@@ -84,15 +84,34 @@ enum Catalog {
     }
 }
 
-actor ImageLoader {
+final class ImageLoader: @unchecked Sendable {
     static let shared = ImageLoader()
     private let cache = NSCache<NSString, CGImage>()
-    init() { cache.totalCostLimit = 160 * 1024 * 1024 }
+    private let queue = OperationQueue()
+    init() {
+        cache.totalCostLimit = 256 * 1024 * 1024
+        queue.maxConcurrentOperationCount = 3
+        queue.qualityOfService = .userInitiated
+    }
 
-    func image(_ url: URL, pixels: Int) -> CGImage? {
+    private func key(_ url: URL, pixels: Int) -> String {
         let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)?.timeIntervalSince1970 ?? 0
-        let key = "\(url.path)|\(modified)|\(pixels)" as NSString
-        if let image = cache.object(forKey: key) { return image }
+        return "\(url.path)|\(modified)|\(pixels)"
+    }
+    func cached(_ url: URL, pixels: Int) -> CGImage? { cache.object(forKey: key(url, pixels: pixels) as NSString) }
+
+    func image(_ url: URL, pixels: Int) async -> CGImage? {
+        let key = key(url, pixels: pixels)
+        if let image = cache.object(forKey: key as NSString) { return image }
+        return await withCheckedContinuation { continuation in
+            queue.addOperation { [self] in
+                let image = decode(url, pixels: pixels)
+                if let image { cache.setObject(image, forKey: key as NSString, cost: image.bytesPerRow * image.height) }
+                continuation.resume(returning: image)
+            }
+        }
+    }
+    private func decode(_ url: URL, pixels: Int) -> CGImage? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
               let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
                 kCGImageSourceCreateThumbnailFromImageAlways: true,
@@ -100,7 +119,6 @@ actor ImageLoader {
                 kCGImageSourceThumbnailMaxPixelSize: pixels,
                 kCGImageSourceShouldCacheImmediately: true
               ] as CFDictionary) else { return nil }
-        cache.setObject(image, forKey: key, cost: image.bytesPerRow * image.height)
         return image
     }
 }
@@ -108,7 +126,7 @@ actor ImageLoader {
 @MainActor @Observable
 final class Library {
     var photos: [Photo] = []
-    var selected: URL?
+    var selected: URL? { didSet { prefetchNeighbors() } }
     var gallery = true
     var busy = false
     var launching = true
@@ -138,12 +156,17 @@ final class Library {
     var showNavigation = false
     var destinations: [URL] = (UserDefaults.standard.stringArray(forKey: "destinations") ?? []).map { URL(fileURLWithPath: $0) }
     var destinationSlots = UserDefaults.standard.dictionary(forKey: "destinationSlots") as? [String: Int] ?? [:]
+    var recordedShortcuts = RecordedShortcut.read()
+    var shortcutError: String?
     var favorites: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "favorites") ?? [])
     var fileStatus: String?
     var rotation = 0
     var zoomCommand = 0
+    var windowFitRequest = 0
     var zoomAction = "fit"
     private var request = UUID()
+    private var prefetchTask: Task<Void, Never>?
+    var zoomStatus: String?
     var filtered: [Photo] { photos.filter { (query.isEmpty || $0.url.lastPathComponent.localizedCaseInsensitiveContains(query)) && (!onlyFavorites || favorites.contains($0.url.path)) } }
     var current: Photo? { photos.first { $0.url == selected } }
     var position: String {
@@ -201,6 +224,32 @@ final class Library {
     }
 
     func choose(_ photo: Photo) { selected = photo.url; rotation = 0; gallery = false }
+    func prefetchNeighbors() {
+        prefetchTask?.cancel()
+        guard let index = photos.firstIndex(where: { $0.url == selected }) else { return }
+        let nearby = [index + 1, index - 1, index + 2].filter { photos.indices.contains($0) }.map { photos[$0] }
+        prefetchTask = Task(priority: .utility) {
+            for photo in nearby {
+                guard !Task.isCancelled else { return }
+                _ = await ImageLoader.shared.image(photo.url, pixels: min(8192, max(photo.width, photo.height)))
+            }
+        }
+    }
+    func exitViewing() {
+        if showSettings { showSettings = false }
+        else if showInfo { showInfo = false }
+        else {
+            request = UUID()
+            prefetchTask?.cancel()
+            selected = nil
+            photos = []
+            gallery = true
+            query = ""
+            rotation = 0
+            showNavigation = false
+            busy = false
+        }
+    }
     func move(_ delta: Int) {
         let items = filtered
         guard !items.isEmpty else { return }
@@ -212,7 +261,11 @@ final class Library {
         selected = items[min(max(index + delta, 0), items.count - 1)].url
         rotation = 0
     }
-    func zoom(_ action: String) { zoomAction = action; zoomCommand += 1 }
+    func zoom(_ action: String) {
+        zoomAction = action
+        if action == "fit" { windowFitRequest += 1 }
+        zoomCommand += 1
+    }
 
     func moveFolder(_ direction: Int) {
         guard !busy, let folder = current?.url.deletingLastPathComponent() else { return }
@@ -306,6 +359,8 @@ final class Library {
     func removeDestination(_ folder: URL) {
         destinations.removeAll { $0 == folder }
         setDestinationSlot(0, for: folder)
+        _ = recordShortcut(nil, folder: folder, move: false)
+        _ = recordShortcut(nil, folder: folder, move: true)
         UserDefaults.standard.set(destinations.map(\.path), forKey: "destinations")
     }
 
@@ -324,6 +379,23 @@ final class Library {
             selected = photos.isEmpty ? nil : photos[min(index, photos.count - 1)].url
             rotation = 0
         } catch { self.error = error.localizedDescription }
+    }
+
+    func recordShortcut(_ shortcut: RecordedShortcut?, folder: URL, move: Bool) -> Bool {
+        let identifier = RecordedShortcut.identifier(folder, move: move)
+        if let shortcut {
+            if let message = shortcut.validationError { shortcutError = message; return false }
+            if let title = shortcut.menuConflict(NSApp?.mainMenu) { shortcutError = "与“\(title)”的快捷键冲突。"; return false }
+            if let conflict = recordedShortcuts.first(where: { $0.key != identifier && $0.value == shortcut }) {
+                let path = conflict.key.components(separatedBy: "|").dropLast().joined(separator: "|")
+                shortcutError = "已分配给“\(URL(fileURLWithPath: path).lastPathComponent)”的\(conflict.key.hasSuffix("|move") ? "移动" : "拷贝")操作。"
+                return false
+            }
+        }
+        shortcutError = nil
+        recordedShortcuts[identifier] = shortcut
+        if let data = try? JSONEncoder().encode(recordedShortcuts) { UserDefaults.standard.set(data, forKey: "recordedShortcuts") }
+        return true
     }
 
     func copyFile(_ photo: Photo? = nil) {

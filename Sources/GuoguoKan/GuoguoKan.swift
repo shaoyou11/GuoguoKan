@@ -4,9 +4,35 @@ import SwiftUI
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let library = Library()
+    private var shortcutMonitor: Any?
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        if let path = Bundle.main.path(forResource: "AppIcon", ofType: "icns"), let icon = NSImage(contentsOfFile: path) {
+            NSApp.applicationIconImage = icon
+        }
+    }
     func applicationDidFinishLaunching(_ notification: Notification) {
         DispatchQueue.main.async { [self] in
             library.launching = false
+            if Bundle.main.bundleIdentifier == "com.shaoyou11.guoguokan" {
+                _ = UpdateManager.shared
+                shortcutMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                    if let self, event.keyCode == 53, NSApp.keyWindow?.attachedSheet == nil,
+                       !(NSApp.keyWindow?.firstResponder is NSTextView) {
+                        library.exitViewing()
+                        return nil
+                    }
+                    guard let self, !library.showSettings, NSApp.keyWindow?.attachedSheet == nil,
+                          !(NSApp.keyWindow?.firstResponder is NSTextView), library.current != nil else { return event }
+                    let shortcut = RecordedShortcut(key: (event.charactersIgnoringModifiers ?? "").lowercased(), modifiers: event.modifierFlags.intersection([.command, .control, .option, .shift]).rawValue)
+                    for folder in library.destinations {
+                        for move in [false, true] where library.recordedShortcuts[RecordedShortcut.identifier(folder, move: move)] == shortcut {
+                            library.transferFile(to: folder, move: move)
+                            return nil
+                        }
+                    }
+                    return event
+                }
+            }
         }
     }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -31,6 +57,9 @@ struct GuoguoKanApp: App {
             CommandGroup(replacing: .appSettings) {
                 Button("设置…") { delegate.library.showSettings = true }.keyboardShortcut(",")
             }
+            CommandGroup(after: .appInfo) {
+                Button("检查更新…") { UpdateManager.shared.check() }
+            }
             CommandGroup(replacing: .newItem) {
                 Button("打开图片或文件夹…") { delegate.library.openPanel() }.keyboardShortcut("o")
             }
@@ -53,6 +82,7 @@ struct GuoguoKanApp: App {
                 }
             }
             CommandMenu("看图") {
+                Button("退出看图") { delegate.library.exitViewing() }.keyboardShortcut(.escape, modifiers: [])
                 Button("上一张") { delegate.library.move(-1) }.keyboardShortcut(.upArrow, modifiers: [])
                 Button("下一张") { delegate.library.move(1) }.keyboardShortcut(.downArrow, modifiers: [])
                 Button("上一个文件夹") { delegate.library.moveFolder(-1) }.keyboardShortcut(.leftArrow, modifiers: [])
@@ -88,7 +118,7 @@ struct Viewer: View {
                 } else if library.gallery {
                     Waterfall(library: library)
                 } else if let photo = library.current {
-                    Canvas(photo: photo, rotation: library.rotation, command: library.zoomCommand, action: library.zoomAction, animatePhotos: library.animatePhotos && !reduceMotion, navigate: library.move, navigateFolder: library.moveFolder)
+                    Canvas(photo: photo, rotation: library.rotation, command: library.zoomCommand, action: library.zoomAction, animatePhotos: library.animatePhotos && !reduceMotion, resizeWindowOnZoom: library.autoSize && !library.showNavigation, reportZoom: { library.zoomStatus = $0 }, navigate: library.move, navigateFolder: library.moveFolder)
                 }
                 if library.busy && library.current == nil {
                     ProgressView("正在处理…").padding(24).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
@@ -216,6 +246,17 @@ struct Viewer: View {
                     .allowsHitTesting(false)
             }
         }
+        .overlay(alignment: .topLeading) {
+            if immersive, let zoom = library.zoomStatus {
+                Text(zoom).font(.system(size: 12, weight: .medium)).padding(.horizontal, 12).padding(.vertical, 7)
+                    .background { ControlMaterial(glass: library.glassControls).clipShape(Capsule()) }
+                    .padding(.top, 48).padding(.leading, 12).allowsHitTesting(false)
+                    .task(id: zoom) {
+                        try? await Task.sleep(for: .seconds(1))
+                        if !Task.isCancelled { library.zoomStatus = nil }
+                    }
+            }
+        }
         .dropDestination(for: URL.self) { urls, _ in library.open(urls); return !urls.isEmpty } isTargeted: { targeted = $0 }
         .safeAreaInset(edge: .top, spacing: 0) {
             if library.gallery && !library.photos.isEmpty {
@@ -231,12 +272,12 @@ struct Viewer: View {
         .overlay(alignment: .top) {
             HStack(spacing: 8) {
                 Text(library.current?.url.lastPathComponent ?? "果果看")
-                    .font(.caption).lineLimit(1).truncationMode(.middle).frame(maxWidth: 130)
+                    .font(.system(size: 13, weight: .regular)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).frame(maxWidth: 130)
                 ScrollView(.horizontal, showsIndicators: false) {
-                    compactToolbar.labelStyle(.iconOnly).buttonStyle(.plain).controlSize(.small)
+                    compactToolbar.labelStyle(.iconOnly).buttonStyle(ViewerButtonStyle()).controlSize(.small)
                 }
                 Button("设置", systemImage: "gearshape") { library.showSettings = true }
-                    .labelStyle(.iconOnly).buttonStyle(.plain).help("设置（⌘,）")
+                    .labelStyle(.iconOnly).buttonStyle(ViewerButtonStyle()).help("设置（⌘,）")
             }
             .padding(.leading, 78).padding(.trailing, 12).frame(height: 38)
             .background(ControlMaterial(glass: library.glassControls))
@@ -263,9 +304,9 @@ struct Viewer: View {
 
     private var empty: some View {
         VStack(spacing: 18) {
-            Image(systemName: "photo.stack").font(.system(size: 64, weight: .ultraLight)).foregroundStyle(.tint)
-            Text("果果看").font(.system(size: 32, weight: .semibold, design: .rounded))
-            Text("让每一张照片，好好被看见。").foregroundStyle(.secondary)
+            Image(nsImage: NSApp.applicationIconImage).resizable().scaledToFit().frame(width: 72, height: 72)
+            Text("果果看").font(.system(size: 26, weight: .medium)).foregroundStyle(.primary.opacity(0.8))
+            Text("打开图片，开始浏览。").font(.system(size: 13)).foregroundStyle(.secondary)
             Button("打开图片或文件夹…", action: library.openPanel).buttonStyle(.borderedProminent).controlSize(.large).padding(.top, 12)
             Text("也可以将文件拖到这里  ·  ⌘O 打开").font(.callout).foregroundStyle(.tertiary)
         }.padding(40)
@@ -409,7 +450,7 @@ struct HoverCaption: View {
             }
             Spacer()
             Button { library.move(1) } label: { Image(systemName: "chevron.right") }.help("下一张")
-        }.buttonStyle(.plain).padding(12).frame(height: 38)
+        }.buttonStyle(ViewerButtonStyle()).padding(12).frame(height: 38)
         .background(ControlMaterial(glass: library.glassControls))
         .opacity(hovering ? 1 : 0)
         .contentShape(Rectangle())

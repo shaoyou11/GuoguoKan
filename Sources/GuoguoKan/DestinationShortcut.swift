@@ -1,11 +1,10 @@
 import SwiftUI
 
 struct DestinationShortcut: ViewModifier {
-    let slot: Int?
-    let move: Bool
+    let shortcut: RecordedShortcut?
     func body(content: Content) -> some View {
-        if let slot, (1...9).contains(slot) {
-            content.keyboardShortcut(KeyEquivalent(Character(String(slot))), modifiers: move ? [.command, .option, .shift] : [.command, .option])
+        if let shortcut, let key = shortcut.key.first {
+            content.keyboardShortcut(KeyEquivalent(key), modifiers: shortcut.swiftModifiers)
         } else {
             content
         }
@@ -20,7 +19,7 @@ struct DestinationButton: View {
     var body: some View {
         Button(folder.lastPathComponent) { library.transferFile(photo, to: folder, move: move) }
             .help(folder.path)
-            .modifier(DestinationShortcut(slot: library.destinationSlots[folder.path], move: move))
+            .modifier(DestinationShortcut(shortcut: library.recordedShortcuts[RecordedShortcut.identifier(folder, move: move)]))
             .disabled((photo ?? library.current) == nil || library.busy)
     }
 }
