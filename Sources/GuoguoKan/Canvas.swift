@@ -23,6 +23,7 @@ struct Canvas: NSViewRepresentable {
     func makeNSView(context: Context) -> PhotoScrollView {
         let view = PhotoScrollView()
         view.animatePhotos = animatePhotos
+        view.rotation = rotation
         view.navigate = navigate
         view.navigateFolder = navigateFolder
         view.load(photo)
@@ -31,8 +32,8 @@ struct Canvas: NSViewRepresentable {
     func updateNSView(_ view: PhotoScrollView, context: Context) {
         view.navigate = navigate
         view.navigateFolder = navigateFolder
-        if view.loadedURL != photo.url { view.load(photo) }
         view.animatePhotos = animatePhotos
+        if view.loadedURL != photo.url { view.load(photo) }
         if view.rotation != rotation { view.rotation = rotation; view.render() }
         if view.lastCommand != command { view.lastCommand = command; view.apply(action) }
     }
@@ -50,6 +51,7 @@ final class PhotoScrollView: NSScrollView {
     private var wheelDelta: CGFloat = 0
     private var gestureNavigated = false
     private(set) var loadedURL: URL?
+    private(set) var displayedImageURL: URL?
     private var heldMagnification: CGFloat?
     private var heldFitting = false
     var navigate: ((Int) -> Void)?
@@ -89,22 +91,29 @@ final class PhotoScrollView: NSScrollView {
 
     func load(_ photo: Photo) {
         loadedURL = photo.url
-        status.stringValue = picture.image == nil ? "正在加载…" : ""
+        picture.layer?.removeAllAnimations()
+        picture.image = nil
+        decoded = nil
+        displayedImageURL = nil
+        heldMagnification = nil
+        status.stringValue = "正在加载…"
         originalSize = NSSize(width: photo.width, height: photo.height)
         task?.cancel()
         task = Task { [weak self] in
             let image = await ImageLoader.shared.image(photo.url, pixels: min(8192, max(photo.width, photo.height)))
-            guard !Task.isCancelled, let self else { return }
-            let transition = decoded != nil && animatePhotos && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            guard !Task.isCancelled, let self, loadedURL == photo.url else { return }
+            let transition = animatePhotos && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
             decoded = image
+            displayedImageURL = image == nil ? nil : photo.url
             status.stringValue = image == nil ? "这张图片无法解码" : ""
             if image == nil { picture.image = nil }
             render()
             if transition, image != nil {
                 picture.wantsLayer = true
-                let fade = CATransition()
-                fade.type = .fade
-                fade.duration = 0.18
+                let fade = CABasicAnimation(keyPath: "opacity")
+                fade.fromValue = 0
+                fade.toValue = 1
+                fade.duration = 0.12
                 fade.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
                 picture.layer?.add(fade, forKey: "photoTransition")
             }

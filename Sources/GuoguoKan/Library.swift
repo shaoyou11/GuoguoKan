@@ -26,6 +26,8 @@ struct Photo: Identifiable, Sendable {
     let height: Int
     let bytes: Int
     let detail: String
+    var created: Date? = nil
+    var color: String = "未知"
     var ratio: CGFloat { CGFloat(max(width, 1)) / CGFloat(max(height, 1)) }
 }
 
@@ -75,7 +77,9 @@ enum Catalog {
             if let exposure = exif[kCGImagePropertyExifExposureTime] as? Double { lines.append("曝光：\(exposure) 秒") }
             return Photo(url: url, width: swapped ? rawHeight : rawWidth, height: swapped ? rawWidth : rawHeight,
                          bytes: (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0,
-                         detail: lines.joined(separator: "\n"))
+                         detail: lines.joined(separator: "\n"),
+                         created: (try? url.resourceValues(forKeys: [.creationDateKey]).creationDate),
+                         color: [properties[kCGImagePropertyColorModel] as? String, properties[kCGImagePropertyProfileName] as? String].compactMap { $0 }.joined(separator: " "))
         }
     }
 }
@@ -107,6 +111,7 @@ final class Library {
     var selected: URL?
     var gallery = true
     var busy = false
+    var launching = true
     var error: String?
     var query = ""
     var columns = 3
@@ -132,6 +137,7 @@ final class Library {
     }
     var showNavigation = false
     var destinations: [URL] = (UserDefaults.standard.stringArray(forKey: "destinations") ?? []).map { URL(fileURLWithPath: $0) }
+    var destinationSlots = UserDefaults.standard.dictionary(forKey: "destinationSlots") as? [String: Int] ?? [:]
     var favorites: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "favorites") ?? [])
     var fileStatus: String?
     var rotation = 0
@@ -160,13 +166,23 @@ final class Library {
         let token = UUID()
         request = token
         busy = true
+        launching = false
         error = nil
         query = ""
         let first = urls[0].resolvingSymlinksInPath().standardizedFileURL
         let isSingleImage = urls.count == 1 && UTType(filenameExtension: first.pathExtension)?.conforms(to: .image) == true
         let inputs = isSingleImage ? [first.deletingLastPathComponent()] : urls
+        gallery = !isSingleImage
+        onlyFavorites = false
         Task {
             do {
+                if isSingleImage {
+                    let initial = try await Task.detached(priority: .userInitiated) { try Catalog.scan([first]) }.value
+                    guard request == token else { return }
+                    photos = initial
+                    selected = initial.first?.url
+                    rotation = 0
+                }
                 let found = try await Task.detached(priority: .userInitiated) { try Catalog.scan(inputs) }.value
                 guard request == token else { return }
                 photos = found
@@ -212,6 +228,7 @@ final class Library {
                 photos = found
                 selected = found.first?.url
                 query = ""
+                onlyFavorites = false
                 rotation = 0
                 fileStatus = found.first?.url.deletingLastPathComponent().lastPathComponent
             } catch { if request == token { self.error = error.localizedDescription } }
@@ -273,7 +290,22 @@ final class Library {
     private func rememberDestination(_ folder: URL) {
         destinations.removeAll { $0 == folder }
         destinations.insert(folder, at: 0)
-        destinations = Array(destinations.prefix(8))
+        UserDefaults.standard.set(destinations.map(\.path), forKey: "destinations")
+    }
+
+    func setDestinationSlot(_ slot: Int, for folder: URL) {
+        guard (0...9).contains(slot) else { return }
+        guard slot == 0 || !destinationSlots.contains(where: { $0.key != folder.path && $0.value == slot }) else {
+            error = "这个快捷键编号已分配给其他文件夹。"
+            return
+        }
+        destinationSlots[folder.path] = slot == 0 ? nil : slot
+        UserDefaults.standard.set(destinationSlots, forKey: "destinationSlots")
+    }
+
+    func removeDestination(_ folder: URL) {
+        destinations.removeAll { $0 == folder }
+        setDestinationSlot(0, for: folder)
         UserDefaults.standard.set(destinations.map(\.path), forKey: "destinations")
     }
 

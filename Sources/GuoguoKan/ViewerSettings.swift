@@ -4,8 +4,16 @@ import SwiftUI
 struct FolderNavigationIcon: View {
     let forward: Bool
     var body: some View {
-        Image(systemName: "folder")
-            .overlay { Image(systemName: forward ? "arrow.right" : "arrow.left").font(.system(size: 8, weight: .semibold)).offset(y: 1) }
+        Image(nsImage: symbol)
+    }
+    private var symbol: NSImage {
+        let image = NSImage(size: NSSize(width: 20, height: 18), flipped: false) { _ in
+            NSImage(systemSymbolName: "folder", accessibilityDescription: nil)?.draw(in: NSRect(x: 0, y: 0, width: 20, height: 18))
+            NSImage(systemSymbolName: forward ? "arrow.right" : "arrow.left", accessibilityDescription: nil)?.draw(in: NSRect(x: 6, y: 3, width: 8, height: 8))
+            return true
+        }
+        image.isTemplate = true
+        return image
     }
 }
 
@@ -17,10 +25,11 @@ struct CopyDestinationMenu: View {
             Button("选择文件夹…") { library.transferFile(photo, move: false) }
                 .keyboardShortcut("c", modifiers: [.command, .shift])
             ForEach(library.destinations, id: \.self) { folder in
-                Button(folder.lastPathComponent) { library.transferFile(photo, to: folder, move: false) }
+                DestinationButton(library: library, folder: folder, move: false, photo: photo)
             }
             Divider()
             Button("添加常用文件夹…", systemImage: "plus") { library.addDestination() }
+            Button("设置文件夹快捷键…") { library.showSettings = true }
         }.disabled(photo == nil || library.busy)
     }
 }
@@ -62,10 +71,25 @@ struct ViewerSettings: View {
                         .font(.callout)
                     Text("“已拷贝”表示已成功写入目标文件夹；放入剪贴板会单独标注。历史标记不保证目标文件一直存在。").font(.caption).foregroundStyle(.secondary)
                     Button("添加常用目标文件夹…") { library.addDestination() }
+                    Text("为目标目录分配 1–9：⌥⌘数字直接拷贝，⇧⌥⌘数字直接移动。快捷键固定绑定目录，不随最近使用排序改变。").font(.caption).foregroundStyle(.secondary)
+                    ForEach(library.destinations, id: \.self) { folder in
+                        VStack(alignment: .leading) {
+                            HStack {
+                                Text(folder.lastPathComponent).lineLimit(1)
+                                Spacer()
+                                Picker("快捷键编号", selection: Binding(get: { library.destinationSlots[folder.path] ?? 0 }, set: { library.setDestinationSlot($0, for: folder) })) {
+                                    Text("无").tag(0)
+                                    ForEach(1...9, id: \.self) { slot in Text(String(slot)).tag(slot) }
+                                }.labelsHidden().frame(width: 80)
+                                Button("移除", role: .destructive) { library.removeDestination(folder) }
+                            }
+                            Text(folder.path).font(.caption2).foregroundStyle(.secondary).textSelection(.enabled)
+                        }
+                    }
                 }
             }.formStyle(.grouped)
             Text("跟随系统的“减少动态效果”和“降低透明度”。").font(.caption).foregroundStyle(.secondary)
-        }.padding(22).frame(width: 430, height: 430)
+        }.padding(22).frame(width: 480, height: 540)
     }
 }
 
@@ -73,24 +97,12 @@ struct ControlMaterial: NSViewRepresentable {
     let glass: Bool
     func makeNSView(context: Context) -> NSView { NSView() }
     func updateNSView(_ view: NSView, context: Context) {
-        let useGlass = glass && !NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
-        if (view.subviews.first is NSGlassEffectView) == useGlass, !view.subviews.isEmpty { return }
-        view.subviews.forEach { $0.removeFromSuperview() }
-        let material: NSView
-        if useGlass {
-            let effect = NSGlassEffectView()
-            effect.cornerRadius = 0
-            effect.effectIsInteractive = true
-            material = effect
-        } else {
-            let effect = NSVisualEffectView()
-            effect.material = .windowBackground
-            effect.blendingMode = .withinWindow
-            effect.state = .active
-            material = effect
-        }
-        material.frame = view.bounds
-        material.autoresizingMask = [.width, .height]
-        view.addSubview(material)
+        let effect = (view.subviews.first as? NSVisualEffectView) ?? NSVisualEffectView()
+        effect.material = glass ? .popover : .windowBackground
+        effect.blendingMode = .withinWindow
+        effect.state = .active
+        effect.frame = view.bounds
+        effect.autoresizingMask = [.width, .height]
+        if effect.superview == nil { view.addSubview(effect) }
     }
 }

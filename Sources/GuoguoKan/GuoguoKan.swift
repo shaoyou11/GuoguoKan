@@ -4,6 +4,15 @@ import SwiftUI
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let library = Library()
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        if notification.userInfo?[NSApplication.launchIsDefaultUserInfoKey] as? Bool == true {
+            library.launching = false
+        }
+    }
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        library.launching = false
+        return true
+    }
     func application(_ sender: NSApplication, open urls: [URL]) { library.open(urls) }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 }
@@ -32,6 +41,16 @@ struct GuoguoKanApp: App {
                     .disabled(delegate.library.current == nil || delegate.library.busy)
                 Button("移动到文件夹…") { delegate.library.transferFile(move: true) }.keyboardShortcut("m", modifiers: [.command, .shift])
                     .disabled(delegate.library.current == nil || delegate.library.busy)
+                Menu("拷贝到常用目录") {
+                    ForEach(delegate.library.destinations, id: \.self) { folder in
+                        DestinationButton(library: delegate.library, folder: folder, move: false)
+                    }
+                }
+                Menu("移动到常用目录") {
+                    ForEach(delegate.library.destinations, id: \.self) { folder in
+                        DestinationButton(library: delegate.library, folder: folder, move: true)
+                    }
+                }
             }
             CommandMenu("看图") {
                 Button("上一张") { delegate.library.move(-1) }.keyboardShortcut(.upArrow, modifiers: [])
@@ -65,13 +84,13 @@ struct Viewer: View {
             ZStack {
                 Color(nsColor: .windowBackgroundColor)
                 if library.photos.isEmpty {
-                    empty
+                    if !library.busy && !library.launching { empty }
                 } else if library.gallery {
                     Waterfall(library: library)
                 } else if let photo = library.current {
                     Canvas(photo: photo, rotation: library.rotation, command: library.zoomCommand, action: library.zoomAction, animatePhotos: library.animatePhotos && !reduceMotion, navigate: library.move, navigateFolder: library.moveFolder)
                 }
-                if library.busy {
+                if library.busy && library.current == nil {
                     ProgressView("正在处理…").padding(24).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
                 }
             }
@@ -108,10 +127,11 @@ struct Viewer: View {
                     Divider()
                     Button("移动到文件夹…") { library.transferFile(move: true) }.keyboardShortcut("m", modifiers: [.command, .shift])
                     ForEach(library.destinations, id: \.self) { folder in
-                        Button(folder.lastPathComponent) { library.transferFile(to: folder, move: true) }
+                        DestinationButton(library: library, folder: folder, move: true)
                     }
                     Divider()
                     Button("添加文件夹…", systemImage: "plus") { library.addDestination() }
+                    Button("设置文件夹快捷键…") { library.showSettings = true }
                 }
                 if let photo = library.current {
                     Button("在 Finder 中显示", systemImage: "folder") { NSWorkspace.shared.activateFileViewerSelecting([photo.url]) }
@@ -174,9 +194,15 @@ struct Viewer: View {
                     }.padding(8)
                 }.frame(width: 126)
             }
+        }
+        .overlay(alignment: .bottomTrailing) {
             if library.showInfo, let photo = library.current {
-                Divider()
-                inspector(photo).frame(width: 250)
+                GeometryReader { geometry in
+                    PhotoInspector(photo: photo) { library.showInfo = false }
+                        .frame(width: min(380, max(200, geometry.size.width - 24)), height: min(360, max(140, geometry.size.height - 76)))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                        .padding(12)
+                }.padding(.bottom, 38)
             }
         }
         .overlay { if targeted { RoundedRectangle(cornerRadius: 14).stroke(.tint, lineWidth: 3).padding(8).allowsHitTesting(false) } }
@@ -270,22 +296,6 @@ struct Viewer: View {
     }
 
 
-    private func inspector(_ photo: Photo) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                Text("图片信息").font(.title3.bold())
-                Text(photo.url.lastPathComponent).font(.headline).textSelection(.enabled)
-                LabeledContent("尺寸", value: "\(photo.width) × \(photo.height)")
-                LabeledContent("大小", value: ByteCountFormatter.string(fromByteCount: Int64(photo.bytes), countStyle: .file))
-                LabeledContent("格式", value: photo.url.pathExtension.uppercased())
-                Divider()
-                Text(photo.detail.isEmpty ? "这张图片没有可显示的拍摄信息。" : photo.detail).font(.callout).textSelection(.enabled)
-                Button("在 Finder 中显示") { NSWorkspace.shared.activateFileViewerSelecting([photo.url]) }
-                ShareLink(item: photo.url) { Label("分享图片", systemImage: "square.and.arrow.up") }
-                Text("旋转仅作用于预览，不修改原文件。").font(.caption).foregroundStyle(.secondary)
-            }.padding(20)
-        }
-    }
 }
 
 struct Waterfall: View {
@@ -350,7 +360,7 @@ struct Waterfall: View {
                 Menu("移动") {
                     Button("选择文件夹…") { library.transferFile(photo, move: true) }
                     ForEach(library.destinations, id: \.self) { folder in
-                        Button(folder.lastPathComponent) { library.transferFile(photo, to: folder, move: true) }
+                        DestinationButton(library: library, folder: folder, move: true, photo: photo)
                     }
                     Button("添加常用文件夹…") { library.addDestination() }
                 }
@@ -399,8 +409,8 @@ struct HoverCaption: View {
             }
             Spacer()
             Button { library.move(1) } label: { Image(systemName: "chevron.right") }.help("下一张")
-        }.buttonStyle(.plain).padding(16).frame(height: 48)
-        .background(.regularMaterial)
+        }.buttonStyle(.plain).padding(12).frame(height: 38)
+        .background(ControlMaterial(glass: library.glassControls))
         .opacity(hovering ? 1 : 0)
         .contentShape(Rectangle())
         .onHover { hovering = $0 }

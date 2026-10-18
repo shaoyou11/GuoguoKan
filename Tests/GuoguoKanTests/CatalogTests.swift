@@ -108,6 +108,68 @@ final class CatalogTests: XCTestCase {
         return folder
     }
 
+    @MainActor
+    func testDestinationShortcutsAreStableAndRejectDuplicates() async {
+        let saved = UserDefaults.standard.object(forKey: "destinationSlots")
+        defer { UserDefaults.standard.set(saved, forKey: "destinationSlots") }
+        let library = Library()
+        library.destinationSlots = [:]
+        let first = URL(fileURLWithPath: "/tmp/shortcut-a")
+        let second = URL(fileURLWithPath: "/tmp/shortcut-b")
+        library.setDestinationSlot(3, for: first)
+        library.setDestinationSlot(3, for: second)
+        XCTAssertEqual(library.destinationSlots[first.path], 3)
+        XCTAssertNil(library.destinationSlots[second.path])
+        XCTAssertNotNil(library.error)
+        library.destinations = [second, first]
+        XCTAssertEqual(library.destinationSlots[first.path], 3)
+        XCTAssertEqual(Library().destinationSlots[first.path], 3)
+        library.setDestinationSlot(0, for: first)
+        XCTAssertNil(library.destinationSlots[first.path])
+    }
+
+    @MainActor
+    func testSingleFileOpenSelectsImageWithoutGalleryAndResetsFilter() async throws {
+        let folder = try fixtureFolder()
+        let url = folder.appendingPathComponent("open.tiff")
+        try makeImage(url)
+        let library = Library()
+        library.onlyFavorites = true
+        library.open([url])
+        XCTAssertFalse(library.gallery)
+        XCTAssertFalse(library.onlyFavorites)
+        for _ in 0..<200 {
+            if !library.busy { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertFalse(library.busy)
+        XCTAssertEqual(library.current?.url, url.resolvingSymlinksInPath())
+        XCTAssertNotNil(library.current?.created)
+        XCTAssertTrue(library.current?.color.contains("RGB") == true)
+    }
+
+    @MainActor
+    func testSwitchingClearsOldImageAndOnlyDisplaysLatestRequest() async throws {
+        let folder = try fixtureFolder()
+        for name in ["one", "two", "three"] { try makeImage(folder.appendingPathComponent("\(name).tiff")) }
+        let photos = try Catalog.scan([folder])
+        let view = PhotoScrollView()
+        view.load(photos[0])
+        for _ in 0..<200 {
+            if view.displayedImageURL != nil { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(view.displayedImageURL, photos[0].url)
+        view.load(photos[1])
+        XCTAssertNil(view.displayedImageURL)
+        view.load(photos[2])
+        for _ in 0..<200 {
+            if view.displayedImageURL != nil { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(view.displayedImageURL, photos[2].url)
+    }
+
     private func makeImage(_ url: URL, orientation: Int = 1) throws {
         let context = try XCTUnwrap(CGContext(data: nil, width: 40, height: 20, bitsPerComponent: 8, bytesPerRow: 0,
                                            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))

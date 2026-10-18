@@ -23,7 +23,7 @@ struct ImageWindowConfiguration: NSViewRepresentable {
         let pinned = library.pinned
         let autoSize = library.autoSize
         let rotation = library.rotation
-        let sidebar: CGFloat = (library.showInfo ? 251 : 0) + (library.showNavigation ? 126 : 0)
+        let sidebar: CGFloat = library.showNavigation ? 126 : 0
         let key = "\(photo?.url.path ?? "")|\(gallery)|\(rotation)|\(sidebar)|\(autoSize)|\(library.zoomCommand)"
         let coordinator = context.coordinator
         DispatchQueue.main.async {
