@@ -1,0 +1,236 @@
+import AppKit
+import SwiftUI
+
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    let library = Library()
+    func application(_ sender: NSApplication, open urls: [URL]) { library.open(urls) }
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+}
+
+@main
+struct GuoguoKanApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
+    var body: some Scene {
+        Window("果果看", id: "viewer") {
+            Viewer(library: delegate.library)
+                .frame(minWidth: 780, minHeight: 520)
+        }
+        .defaultSize(width: 1180, height: 780)
+        .windowToolbarStyle(.unified)
+        .commands {
+            CommandGroup(replacing: .newItem) {
+                Button("打开图片或文件夹…") { delegate.library.openPanel() }.keyboardShortcut("o")
+            }
+            CommandMenu("看图") {
+                Button("上一张") { delegate.library.move(-1) }.keyboardShortcut(.leftArrow, modifiers: [])
+                Button("下一张") { delegate.library.move(1) }.keyboardShortcut(.rightArrow, modifiers: [])
+                Divider()
+                Button("单图 / 瀑布流") { delegate.library.gallery.toggle() }.keyboardShortcut("g")
+                Button("适应窗口") { delegate.library.zoom("fit") }.keyboardShortcut("0")
+                Button("实际像素") { delegate.library.zoom("actual") }.keyboardShortcut("1")
+                Button("放大") { delegate.library.zoom("in") }.keyboardShortcut("+")
+                Button("缩小") { delegate.library.zoom("out") }.keyboardShortcut("-")
+                Button("向右旋转") { delegate.library.rotation = (delegate.library.rotation + 90) % 360 }.keyboardShortcut("r")
+                Button("图片信息") { delegate.library.showInfo.toggle() }.keyboardShortcut("i")
+            }
+        }
+    }
+}
+
+struct Viewer: View {
+    @Bindable var library: Library
+    @State private var targeted = false
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ZStack {
+                Color(nsColor: .windowBackgroundColor)
+                if library.photos.isEmpty {
+                    empty
+                } else if library.gallery {
+                    Waterfall(library: library)
+                } else if let photo = library.current {
+                    Canvas(photo: photo, rotation: library.rotation, command: library.zoomCommand, action: library.zoomAction)
+                        .id(photo.id)
+                }
+                if library.busy {
+                    ProgressView("正在读取图片…").padding(24).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+                }
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if !library.photos.isEmpty {
+                    controls.padding(.bottom, 16).padding(.top, 8)
+                }
+            }
+            if library.showInfo, let photo = library.current {
+                Divider()
+                inspector(photo).frame(width: 250)
+            }
+        }
+        .overlay { if targeted { RoundedRectangle(cornerRadius: 14).stroke(.tint, lineWidth: 3).padding(8).allowsHitTesting(false) } }
+        .dropDestination(for: URL.self) { urls, _ in library.open(urls); return !urls.isEmpty } isTargeted: { targeted = $0 }
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Button(action: library.openPanel) { Label("打开", systemImage: "folder") }.help("打开图片或文件夹（⌘O）")
+            }
+            ToolbarItem {
+                Picker("浏览模式", selection: $library.gallery) {
+                    Image(systemName: "photo").tag(false)
+                    Image(systemName: "square.grid.2x2").tag(true)
+                }.pickerStyle(.segmented).frame(width: 88)
+            }
+            ToolbarItem {
+                if library.gallery {
+                    Stepper("\(library.columns) 列", value: $library.columns, in: 1...6).frame(width: 100)
+                }
+            }
+            ToolbarItem {
+                Button { library.pinned.toggle() } label: { Label("窗口置顶", systemImage: library.pinned ? "pin.fill" : "pin") }
+                    .tint(library.pinned ? .accentColor : nil).help("窗口置顶")
+            }
+            ToolbarItem {
+                Button { library.showInfo.toggle() } label: { Label("图片信息", systemImage: "info.circle") }.help("图片信息（⌘I）")
+            }
+        }
+        .searchable(text: $library.query, placement: .toolbar, prompt: "搜索文件名")
+        .background(WindowConfiguration(pinned: library.pinned))
+        .alert("打开图片", isPresented: Binding(get: { library.error != nil }, set: { if !$0 { library.error = nil } })) {
+            Button("好") { library.error = nil }
+        } message: { Text(library.error ?? "") }
+    }
+
+    private var empty: some View {
+        VStack(spacing: 18) {
+            Image(systemName: "photo.stack").font(.system(size: 64, weight: .ultraLight)).foregroundStyle(.tint)
+            Text("果果看").font(.system(size: 32, weight: .semibold, design: .rounded))
+            Text("让每一张照片，好好被看见。").foregroundStyle(.secondary)
+            Button("打开图片或文件夹…", action: library.openPanel).buttonStyle(.borderedProminent).controlSize(.large).padding(.top, 12)
+            Text("也可以将文件拖到这里  ·  ⌘O 打开").font(.callout).foregroundStyle(.tertiary)
+        }.padding(40)
+    }
+
+    private var controls: some View {
+        InteractiveGlass {
+            HStack(spacing: 18) {
+                Button { library.move(-1) } label: { Image(systemName: "chevron.left") }.help("上一张（←）")
+                Text(library.position).font(.system(.callout, design: .monospaced)).monospacedDigit().frame(minWidth: 65)
+                Button { library.move(1) } label: { Image(systemName: "chevron.right") }.help("下一张（→）")
+                if !library.gallery {
+                    Divider().frame(height: 18)
+                    Button { library.zoom("out") } label: { Image(systemName: "minus.magnifyingglass") }.help("缩小")
+                    Button("适应") { library.zoom("fit") }.help("适应窗口（⌘0）")
+                    Button("1:1") { library.zoom("actual") }.help("实际像素（⌘1）")
+                    Button { library.zoom("in") } label: { Image(systemName: "plus.magnifyingglass") }.help("放大")
+                    Button { library.rotation = (library.rotation + 90) % 360 } label: { Image(systemName: "rotate.right") }.help("旋转预览（⌘R）")
+                }
+            }.buttonStyle(.plain).padding(.horizontal, 22).padding(.vertical, 14)
+        }.frame(width: library.gallery ? 210 : 510, height: 48)
+    }
+
+    private func inspector(_ photo: Photo) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                Text("图片信息").font(.title3.bold())
+                Text(photo.url.lastPathComponent).font(.headline).textSelection(.enabled)
+                LabeledContent("尺寸", value: "\(photo.width) × \(photo.height)")
+                LabeledContent("大小", value: ByteCountFormatter.string(fromByteCount: Int64(photo.bytes), countStyle: .file))
+                LabeledContent("格式", value: photo.url.pathExtension.uppercased())
+                Divider()
+                Text(photo.detail.isEmpty ? "这张图片没有可显示的拍摄信息。" : photo.detail).font(.callout).textSelection(.enabled)
+                Button("在 Finder 中显示") { NSWorkspace.shared.activateFileViewerSelecting([photo.url]) }
+                ShareLink(item: photo.url) { Label("分享图片", systemImage: "square.and.arrow.up") }
+                Text("旋转仅作用于预览，不修改原文件。").font(.caption).foregroundStyle(.secondary)
+            }.padding(20)
+        }
+    }
+}
+
+struct Waterfall: View {
+    @Bindable var library: Library
+    private var columns: [[Photo]] {
+        var buckets = Array(repeating: [Photo](), count: library.columns)
+        var heights = Array(repeating: CGFloat(0), count: library.columns)
+        for photo in library.filtered {
+            let index = heights.indices.min(by: { heights[$0] < heights[$1] }) ?? 0
+            buckets[index].append(photo)
+            heights[index] += 1 / photo.ratio + 0.14
+        }
+        return buckets
+    }
+    var body: some View {
+        GeometryReader { geometry in
+            ScrollView {
+                if library.filtered.isEmpty {
+                    ContentUnavailableView.search(text: library.query)
+                } else {
+                    HStack(alignment: .top, spacing: 14) {
+                        ForEach(Array(columns.enumerated()), id: \.offset) { _, photos in
+                            LazyVStack(spacing: 14) {
+                                ForEach(photos) { photo in
+                                    Thumbnail(photo: photo, width: max(60, (geometry.size.width - 40 - CGFloat(library.columns - 1) * 14) / CGFloat(library.columns)))
+                                        .onTapGesture { library.choose(photo) }
+                                        .accessibilityAddTraits(.isButton)
+                                        .accessibilityAction { library.choose(photo) }
+                                        .contextMenu {
+                                            Button("打开图片") { library.choose(photo) }
+                                            Button("在 Finder 中显示") { NSWorkspace.shared.activateFileViewerSelecting([photo.url]) }
+                                        }
+                                }
+                            }
+                        }
+                    }.padding(20)
+                }
+            }
+        }
+    }
+}
+
+struct Thumbnail: View {
+    let photo: Photo
+    let width: CGFloat
+    @State private var image: CGImage?
+    @State private var failed = false
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 10).fill(.quaternary)
+                if let image { Image(decorative: image, scale: 1).resizable().scaledToFit() }
+                else { Image(systemName: failed ? "exclamationmark.triangle" : "photo").foregroundStyle(.secondary) }
+            }.frame(width: width, height: width / photo.ratio).clipShape(RoundedRectangle(cornerRadius: 10))
+            Text(photo.url.deletingPathExtension().lastPathComponent).font(.caption).lineLimit(1).foregroundStyle(.secondary)
+        }.frame(width: width).contentShape(Rectangle()).accessibilityLabel(photo.url.lastPathComponent)
+        .task(id: Int(width)) {
+            let loaded = await ImageLoader.shared.image(photo.url, pixels: min(1800, max(300, Int(width * 2))))
+            guard !Task.isCancelled else { return }
+            image = loaded
+            failed = loaded == nil
+        }
+    }
+}
+
+struct InteractiveGlass<Content: View>: NSViewRepresentable {
+    @ViewBuilder var content: () -> Content
+    func makeNSView(context: Context) -> NSGlassEffectView {
+        let glass = NSGlassEffectView()
+        glass.cornerRadius = 24
+        glass.effectIsInteractive = true
+        glass.contentView = NSHostingView(rootView: content())
+        return glass
+    }
+    func updateNSView(_ view: NSGlassEffectView, context: Context) {
+        (view.contentView as? NSHostingView<Content>)?.rootView = content()
+    }
+}
+
+struct WindowConfiguration: NSViewRepresentable {
+    let pinned: Bool
+    func makeNSView(context: Context) -> NSView { NSView() }
+    func updateNSView(_ view: NSView, context: Context) {
+        DispatchQueue.main.async {
+            view.window?.level = pinned ? .floating : .normal
+            view.window?.autorecalculatesKeyViewLoop = true
+            view.window?.setFrameAutosaveName("GuoguoKan.Main")
+        }
+    }
+}

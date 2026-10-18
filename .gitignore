@@ -1,0 +1,9 @@
+.DS_Store
+.build/
+.swiftpm/
+交付/
+验收记录.md
+GitHub链接.md
+发布说明.md
+*.xcuserstate
+xcuserdata/
