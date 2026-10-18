@@ -60,6 +60,7 @@ struct GuoguoKanApp: App {
         Window("果果看", id: "viewer") {
             Viewer(library: delegate.library)
                 .frame(minWidth: 240, minHeight: 200)
+                .containerBackground(.clear, for: .window)
         }
         .defaultSize(width: 1180, height: 780)
         .windowStyle(.hiddenTitleBar)
@@ -122,7 +123,8 @@ struct Viewer: View {
     var body: some View {
         HStack(spacing: 0) {
             ZStack {
-                Color(nsColor: .windowBackgroundColor)
+                if library.photos.isEmpty { Color(nsColor: .textBackgroundColor) }
+                else { Color(nsColor: .windowBackgroundColor) }
                 if library.photos.isEmpty {
                     if !library.busy && !library.launching { empty }
                 } else if library.gallery {
@@ -317,15 +319,12 @@ struct Viewer: View {
             Image(nsImage: NSApp.applicationIconImage).resizable().scaledToFit().frame(width: 72, height: 72)
             Text("果果看").font(.system(size: 26, weight: .medium)).foregroundStyle(.primary.opacity(0.8))
             Text("打开图片，开始浏览。").font(.system(size: 13)).foregroundStyle(.secondary)
-            Button("打开图片或文件夹…", systemImage: "folder", action: library.openPanel).buttonStyle(.glass).controlSize(.large).padding(.top, 8)
+            Button("打开图片或文件夹…", systemImage: "folder", action: library.openPanel).buttonStyle(.glassProminent).tint(.primary.opacity(0.78)).controlSize(.large).padding(.top, 8)
             Text("也可以将文件拖到这里  ·  ⌘O 打开").font(.callout).foregroundStyle(.tertiary)
         }
         .padding(36)
-        .background(ControlMaterial(glass: library.glassControls))
-        .clipShape(RoundedRectangle(cornerRadius: 28))
         .padding(32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(WelcomeMaterial(enabled: library.glassControls))
     }
 
     private var compactToolbar: some View {

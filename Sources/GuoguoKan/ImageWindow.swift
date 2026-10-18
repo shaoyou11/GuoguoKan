@@ -29,6 +29,8 @@ struct ImageWindowConfiguration: NSViewRepresentable {
         let coordinator = context.coordinator
         DispatchQueue.main.async {
             guard let window = view.window else { return }
+            window.titlebarAppearsTransparent = true
+            window.isMovableByWindowBackground = readyForWelcome
             window.level = pinned ? .floating : .normal
             window.title = photo?.url.lastPathComponent ?? "果果看"
             for type in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {

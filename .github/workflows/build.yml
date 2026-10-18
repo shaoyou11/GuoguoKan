@@ -23,6 +23,7 @@ jobs:
         shell: bash
         run: |
           echo "DEVELOPER_DIR=$(xcode-select -p)" >> "$GITHUB_ENV"
+          echo "GUOGUOKAN_OUTPUT_DIR=$HOME/Library/Caches/GuoguoKan-delivery.noindex" >> "$GITHUB_ENV"
           xcrun swift --version
           SDK_VERSION=$(xcrun --sdk macosx --show-sdk-version)
           test "${SDK_VERSION%%.*}" -ge 27
@@ -37,17 +38,17 @@ jobs:
       - name: 验证压缩包
         shell: bash
         run: |
-          ditto -x -k 交付/GuoguoKan-*.zip "$RUNNER_TEMP/verify"
+          ditto -x -k "$GUOGUOKAN_OUTPUT_DIR"/GuoguoKan-*.zip "$RUNNER_TEMP/verify"
           codesign --verify --deep --strict "$RUNNER_TEMP/verify/果果看.app"
           test "$(lipo -archs "$RUNNER_TEMP/verify/果果看.app/Contents/MacOS/GuoguoKan")" = arm64
-          cd 交付
+          cd "$GUOGUOKAN_OUTPUT_DIR"
           shasum -a 256 GuoguoKan-*.zip > SHA256SUMS.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: GuoguoKan-arm64
           path: |
-            交付/GuoguoKan-*.zip
-            交付/SHA256SUMS.txt
+            ${{ env.GUOGUOKAN_OUTPUT_DIR }}/GuoguoKan-*.zip
+            ${{ env.GUOGUOKAN_OUTPUT_DIR }}/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 30
       - name: 发布版本
@@ -62,4 +63,4 @@ jobs:
           fi
           test -n "$SPARKLE_PRIVATE_KEY"
           python3 Scripts/make_appcast.py
-          gh release create "$GITHUB_REF_NAME" 交付/GuoguoKan-*.zip 交付/SHA256SUMS.txt 交付/appcast.xml --verify-tag --latest --title "果果看 $GITHUB_REF_NAME" --notes "Apple Silicon · macOS 27+。自动编译并通过测试，包含签名应用内更新。使用 ad-hoc 签名，尚未完成 Developer ID 公证。"
+          gh release create "$GITHUB_REF_NAME" "$GUOGUOKAN_OUTPUT_DIR"/GuoguoKan-*.zip "$GUOGUOKAN_OUTPUT_DIR/SHA256SUMS.txt" "$GUOGUOKAN_OUTPUT_DIR/appcast.xml" --verify-tag --latest --title "果果看 $GITHUB_REF_NAME" --notes "Apple Silicon · macOS 27+。自动编译并通过测试，包含签名应用内更新。使用 ad-hoc 签名，尚未完成 Developer ID 公证。"
