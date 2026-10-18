@@ -63,6 +63,8 @@ struct ViewerSettings: View {
                     Toggle("自动隐藏顶部工具栏", isOn: $library.autoHideToolbar)
                     Text("鼠标移到顶边显示，离开后自动收起，不改变图片位置。").font(.caption).foregroundStyle(.secondary)
                     Toggle("切换图片时淡入", isOn: $library.animatePhotos)
+                    Toggle("滚轮切换图片和文件夹", isOn: $library.scrollNavigation)
+                    Text("关闭后滚轮不切图；放大后的平移、触控板捏合及 Shift / Command 滚轮缩放仍可使用。").font(.caption).foregroundStyle(.secondary)
                     Toggle("使用玻璃控制栏", isOn: $library.glassControls)
                     Toggle("窗口随图片大小调整", isOn: $library.autoSize)
                 }

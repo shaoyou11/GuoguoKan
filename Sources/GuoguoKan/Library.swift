@@ -148,6 +148,9 @@ final class Library {
     var glassControls = UserDefaults.standard.object(forKey: "glassControls") as? Bool ?? true {
         didSet { UserDefaults.standard.set(glassControls, forKey: "glassControls") }
     }
+    var scrollNavigation = UserDefaults.standard.object(forKey: "scrollNavigation") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(scrollNavigation, forKey: "scrollNavigation") }
+    }
     var copiedPhotos = UserDefaults.standard.dictionary(forKey: "copiedPhotos") as? [String: String] ?? [:]
     var clipboardPhoto: URL?
     var autoSize = UserDefaults.standard.object(forKey: "autoSize") as? Bool ?? true {
@@ -190,6 +193,9 @@ final class Library {
         request = token
         busy = true
         launching = false
+        photos = []
+        selected = nil
+        showInfo = false
         error = nil
         query = ""
         let first = urls[0].resolvingSymlinksInPath().standardizedFileURL
@@ -235,20 +241,11 @@ final class Library {
             }
         }
     }
-    func exitViewing() {
+    func exitViewing(closeWindow: (() -> Void)? = nil) {
         if showSettings { showSettings = false }
         else if showInfo { showInfo = false }
-        else {
-            request = UUID()
-            prefetchTask?.cancel()
-            selected = nil
-            photos = []
-            gallery = true
-            query = ""
-            rotation = 0
-            showNavigation = false
-            busy = false
-        }
+        else if let closeWindow { closeWindow() }
+        else { NSApp.keyWindow?.performClose(nil) }
     }
     func move(_ delta: Int) {
         let items = filtered

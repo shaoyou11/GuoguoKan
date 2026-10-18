@@ -152,9 +152,11 @@ final class CatalogTests: XCTestCase {
         XCTAssertFalse(library.showInfo)
         library.gallery = false
         library.selected = URL(fileURLWithPath: "/tmp/example.png")
-        library.exitViewing()
-        XCTAssertTrue(library.gallery)
-        XCTAssertNil(library.selected)
+        var closed = false
+        library.exitViewing { closed = true }
+        XCTAssertTrue(closed)
+        XCTAssertFalse(library.gallery)
+        XCTAssertNotNil(library.selected)
         XCTAssertTrue(library.photos.isEmpty)
     }
 
@@ -162,11 +164,33 @@ final class CatalogTests: XCTestCase {
     func testRestoredLaunchDoesNotLeaveWelcomeHidden() async throws {
         let delegate = AppDelegate()
         delegate.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification, userInfo: [NSApplication.launchIsDefaultUserInfoKey: false]))
+        XCTAssertTrue(delegate.library.launching)
+        _ = delegate.applicationShouldOpenUntitledFile(NSApplication.shared)
         for _ in 0..<20 {
             if !delegate.library.launching { break }
             try await Task.sleep(for: .milliseconds(10))
         }
         XCTAssertFalse(delegate.library.launching)
+    }
+
+    @MainActor
+    func testDocumentLaunchWaitsForFileEvent() async throws {
+        let delegate = AppDelegate()
+        delegate.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification, userInfo: [NSApplication.launchIsDefaultUserInfoKey: false]))
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertTrue(delegate.library.launching)
+        let folder = try fixtureFolder()
+        let url = folder.appendingPathComponent("launch.tiff")
+        try makeImage(url)
+        delegate.application(NSApplication.shared, open: [url])
+        XCTAssertFalse(delegate.library.launching)
+        XCTAssertTrue(delegate.library.busy)
+        XCTAssertFalse(delegate.library.gallery)
+        for _ in 0..<200 {
+            if !delegate.library.busy { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(delegate.library.current?.url, url.resolvingSymlinksInPath())
     }
 
     @MainActor

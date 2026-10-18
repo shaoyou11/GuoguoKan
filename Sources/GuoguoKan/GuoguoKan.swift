@@ -6,13 +6,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let library = Library()
     private var shortcutMonitor: Any?
     func applicationWillFinishLaunching(_ notification: Notification) {
+        NSAppleEventManager.shared().setEventHandler(self, andSelector: #selector(openApplication(_:reply:)), forEventClass: AEEventClass(kCoreEventClass), andEventID: AEEventID(kAEOpenApplication))
         if let path = Bundle.main.path(forResource: "AppIcon", ofType: "icns"), let icon = NSImage(contentsOfFile: path) {
             NSApp.applicationIconImage = icon
         }
     }
+    @objc func openApplication(_ event: NSAppleEventDescriptor, reply: NSAppleEventDescriptor) {
+        library.launching = false
+    }
+    func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool {
+        library.launching = false
+        return true
+    }
     func applicationDidFinishLaunching(_ notification: Notification) {
         DispatchQueue.main.async { [self] in
-            library.launching = false
+            if notification.userInfo?[NSApplication.launchIsDefaultUserInfoKey] as? Bool == true {
+                library.launching = false
+            }
             if Bundle.main.bundleIdentifier == "com.shaoyou11.guoguokan" {
                 _ = UpdateManager.shared
                 shortcutMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
@@ -118,7 +128,7 @@ struct Viewer: View {
                 } else if library.gallery {
                     Waterfall(library: library)
                 } else if let photo = library.current {
-                    Canvas(photo: photo, rotation: library.rotation, command: library.zoomCommand, action: library.zoomAction, animatePhotos: library.animatePhotos && !reduceMotion, resizeWindowOnZoom: library.autoSize && !library.showNavigation, reportZoom: { library.zoomStatus = $0 }, navigate: library.move, navigateFolder: library.moveFolder)
+                    Canvas(photo: photo, rotation: library.rotation, command: library.zoomCommand, action: library.zoomAction, animatePhotos: library.animatePhotos && !reduceMotion, resizeWindowOnZoom: library.autoSize && !library.showNavigation, scrollNavigation: library.scrollNavigation, reportZoom: { library.zoomStatus = $0 }, navigate: library.move, navigateFolder: library.moveFolder)
                 }
                 if library.busy && library.current == nil {
                     ProgressView("正在处理…").padding(24).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
@@ -307,14 +317,24 @@ struct Viewer: View {
             Image(nsImage: NSApp.applicationIconImage).resizable().scaledToFit().frame(width: 72, height: 72)
             Text("果果看").font(.system(size: 26, weight: .medium)).foregroundStyle(.primary.opacity(0.8))
             Text("打开图片，开始浏览。").font(.system(size: 13)).foregroundStyle(.secondary)
-            Button("打开图片或文件夹…", action: library.openPanel).buttonStyle(.borderedProminent).controlSize(.large).padding(.top, 12)
+            Button("打开图片或文件夹…", systemImage: "folder", action: library.openPanel).buttonStyle(.glass).controlSize(.large).padding(.top, 8)
             Text("也可以将文件拖到这里  ·  ⌘O 打开").font(.callout).foregroundStyle(.tertiary)
-        }.padding(40)
+        }
+        .padding(36)
+        .background(ControlMaterial(glass: library.glassControls))
+        .clipShape(RoundedRectangle(cornerRadius: 28))
+        .padding(32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(WelcomeMaterial(enabled: library.glassControls))
     }
 
     private var compactToolbar: some View {
         HStack(spacing: 10) {
             Button("打开", systemImage: "folder") { library.openPanel() }.help("打开（⌘O）")
+            Button(library.scrollNavigation ? "关闭滚轮切图" : "开启滚轮切图", systemImage: library.scrollNavigation ? "computermouse.fill" : "computermouse") { library.scrollNavigation.toggle() }
+                .help("滚轮切图：\(library.scrollNavigation ? "已开启" : "已关闭")")
+                .accessibilityValue(library.scrollNavigation ? "已开启" : "已关闭")
+            if !library.photos.isEmpty {
             Button("上一张", systemImage: "arrow.left") { library.move(-1) }.help("上一张（↑）")
             Button("下一张", systemImage: "arrow.right") { library.move(1) }.help("下一张（↓）")
             Divider().frame(height: 14)
@@ -333,6 +353,7 @@ struct Viewer: View {
             Button("置顶", systemImage: library.pinned ? "pin.fill" : "pin") { library.pinned.toggle() }
             Text(library.position).font(.caption).foregroundStyle(.secondary)
             if let photo = library.current { CopyBadge(library: library, photo: photo) }
+            }
         }.font(.system(size: 13)).fixedSize()
     }
 

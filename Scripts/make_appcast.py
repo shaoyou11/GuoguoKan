@@ -22,7 +22,7 @@ ET.SubElement(item, "title").text = f"果果看 {version}"
 ET.SubElement(item, f"{{{namespace}}}version").text = info["CFBundleVersion"]
 ET.SubElement(item, f"{{{namespace}}}shortVersionString").text = version
 ET.SubElement(item, f"{{{namespace}}}minimumSystemVersion").text = "27.0"
-ET.SubElement(item, "description").text = "改进图片浏览、快捷键录入、玻璃界面与应用内更新。此版本尚未完成 Developer ID 公证。"
+ET.SubElement(item, "description").text = "修正 Esc 关闭看图与文件启动首页闪现，新增玻璃欢迎页和滚轮切图开关，改进缩放交互。此版本尚未完成 Developer ID 公证。"
 ET.SubElement(item, "enclosure", {"url": f"https://github.com/shaoyou11/GuoguoKan/releases/download/v{version}/{archive.name}", "length": str(archive.stat().st_size), "type": "application/octet-stream", f"{{{namespace}}}edSignature": signature})
 output = root / "交付/appcast.xml"
 ET.ElementTree(rss).write(output, encoding="utf-8", xml_declaration=True)

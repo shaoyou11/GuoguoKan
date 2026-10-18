@@ -18,6 +18,7 @@ struct Canvas: NSViewRepresentable {
     let action: String
     let animatePhotos: Bool
     let resizeWindowOnZoom: Bool
+    let scrollNavigation: Bool
     var reportZoom: (String) -> Void
     var navigate: (Int) -> Void
     var navigateFolder: (Int) -> Void
@@ -27,6 +28,7 @@ struct Canvas: NSViewRepresentable {
         view.animatePhotos = animatePhotos
         view.rotation = rotation
         view.resizeWindowOnZoom = resizeWindowOnZoom
+        view.scrollNavigation = scrollNavigation
         view.lastCommand = command
         view.reportZoom = reportZoom
         view.navigate = navigate
@@ -40,8 +42,11 @@ struct Canvas: NSViewRepresentable {
         view.navigateFolder = navigateFolder
         view.animatePhotos = animatePhotos
         view.resizeWindowOnZoom = resizeWindowOnZoom
-        if view.loadedURL != photo.url { view.load(photo) }
-        if view.rotation != rotation { view.rotation = rotation; view.render() }
+        view.scrollNavigation = scrollNavigation
+        if view.loadedURL != photo.url {
+            view.rotation = rotation
+            view.load(photo)
+        } else if view.rotation != rotation { view.rotation = rotation; view.render() }
         if view.lastCommand != command { view.lastCommand = command; view.apply(action) }
     }
 }
@@ -68,6 +73,7 @@ final class PhotoScrollView: NSScrollView {
     var lastCommand = 0
     var animatePhotos = true
     var resizeWindowOnZoom = false
+    var scrollNavigation = true
     var reportZoom: ((String) -> Void)?
 
     override init(frame: NSRect) {
@@ -229,6 +235,7 @@ final class PhotoScrollView: NSScrollView {
             return
         }
         guard fitting else { super.scrollWheel(with: event); return }
+        guard scrollNavigation else { wheelDelta = 0; gestureNavigated = false; return }
         guard event.momentumPhase.isEmpty else { return }
         if event.phase.contains(.began) { gestureNavigated = false; wheelDelta = 0 }
         if event.phase.contains(.ended) || event.phase.contains(.cancelled) { gestureNavigated = false; return }
@@ -260,9 +267,12 @@ final class PhotoScrollView: NSScrollView {
             showZoom()
         }
     }
-    @objc private func toggleFit() { fitting ? apply("actual") : fit() }
+    @objc private func toggleFit() {
+        if fitting { apply("actual") }
+        else { fit(); showZoom() }
+    }
     @objc private func drag(_ recognizer: NSPanGestureRecognizer) {
-        fitting = false
+        guard !fitting else { return }
         let delta = recognizer.translation(in: contentView)
         let origin = contentView.bounds.origin
         contentView.scroll(to: NSPoint(x: origin.x - delta.x, y: origin.y - delta.y))
