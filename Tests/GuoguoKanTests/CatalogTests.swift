@@ -4,6 +4,32 @@ import UniformTypeIdentifiers
 @testable import GuoguoKan
 
 final class CatalogTests: XCTestCase {
+    func testPortraitWindowFitsScreenWithoutWideLetterboxing() {
+        let size = ImageWindowGeometry.contentSize(image: CGSize(width: 1320, height: 2868), available: CGSize(width: 1400, height: 850), scale: 2, sidebar: 0)
+        XCTAssertEqual(size.height, 850, accuracy: 0.01)
+        XCTAssertEqual(size.width / size.height, 1320.0 / 2868.0, accuracy: 0.001)
+    }
+
+    func testLandscapeWindowIncludesInspectorAndDoesNotUpscale() {
+        let size = ImageWindowGeometry.contentSize(image: CGSize(width: 1200, height: 800), available: CGSize(width: 1400, height: 850), scale: 2, sidebar: 251)
+        XCTAssertEqual(size.width, 851)
+        XCTAssertEqual(size.height, 400)
+    }
+
+    func testFolderNavigationSkipsEmptyAndUsesNaturalOrder() throws {
+        let parent = try fixtureFolder()
+        let first = parent.appendingPathComponent("相册1")
+        let empty = parent.appendingPathComponent("相册2")
+        let last = parent.appendingPathComponent("相册10")
+        for folder in [first, empty, last] { try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true) }
+        try makeImage(first.appendingPathComponent("first.tiff"))
+        try makeImage(last.appendingPathComponent("last.tiff"))
+        XCTAssertEqual(try Catalog.adjacentFolder(to: first, direction: 1)?.first?.url.lastPathComponent, "last.tiff")
+        XCTAssertEqual(try Catalog.adjacentFolder(to: last, direction: -1)?.first?.url.lastPathComponent, "first.tiff")
+        XCTAssertNil(try Catalog.adjacentFolder(to: first, direction: -1))
+        XCTAssertNil(try Catalog.adjacentFolder(to: last, direction: 1))
+    }
+
     func testCopyPreservesSourceAndContents() throws {
         let sourceFolder = try fixtureFolder()
         let destination = try fixtureFolder()

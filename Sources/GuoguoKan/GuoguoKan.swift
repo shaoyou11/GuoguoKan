@@ -14,10 +14,10 @@ struct GuoguoKanApp: App {
     var body: some Scene {
         Window("果果看", id: "viewer") {
             Viewer(library: delegate.library)
-                .frame(minWidth: 420, minHeight: 320)
+                .frame(minWidth: 240, minHeight: 200)
         }
         .defaultSize(width: 1180, height: 780)
-        .windowToolbarStyle(.unified)
+        .windowToolbarStyle(.unifiedCompact)
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("打开图片或文件夹…") { delegate.library.openPanel() }.keyboardShortcut("o")
@@ -31,8 +31,10 @@ struct GuoguoKanApp: App {
                     .disabled(delegate.library.current == nil || delegate.library.busy)
             }
             CommandMenu("看图") {
-                Button("上一张") { delegate.library.move(-1) }.keyboardShortcut(.leftArrow, modifiers: [])
-                Button("下一张") { delegate.library.move(1) }.keyboardShortcut(.rightArrow, modifiers: [])
+                Button("上一张") { delegate.library.move(-1) }.keyboardShortcut(.upArrow, modifiers: [])
+                Button("下一张") { delegate.library.move(1) }.keyboardShortcut(.downArrow, modifiers: [])
+                Button("上一个文件夹") { delegate.library.moveFolder(-1) }.keyboardShortcut(.leftArrow, modifiers: [])
+                Button("下一个文件夹") { delegate.library.moveFolder(1) }.keyboardShortcut(.rightArrow, modifiers: [])
                 Divider()
                 Button("单图 / 瀑布流") { delegate.library.gallery.toggle() }.keyboardShortcut("g")
                 Button("适应窗口") { delegate.library.zoom("fit") }.keyboardShortcut("0")
@@ -49,7 +51,6 @@ struct GuoguoKanApp: App {
 struct Viewer: View {
     @Bindable var library: Library
     @State private var targeted = false
-    @State private var revealControls = false
     private var immersive: Bool { !library.gallery && library.current != nil }
 
     var body: some View {
@@ -61,32 +62,13 @@ struct Viewer: View {
                 } else if library.gallery {
                     Waterfall(library: library)
                 } else if let photo = library.current {
-                    Canvas(photo: photo, rotation: library.rotation, command: library.zoomCommand, action: library.zoomAction, navigate: library.move)
+                    Canvas(photo: photo, rotation: library.rotation, command: library.zoomCommand, action: library.zoomAction, navigate: library.move, navigateFolder: library.moveFolder)
                 }
                 if library.busy {
                     ProgressView("正在处理…").padding(24).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
                 }
             }
-            .ignoresSafeArea(.container, edges: immersive ? .top : [])
-            .overlay(alignment: .top) {
-                if immersive {
-                    VStack(spacing: 0) {
-                        HStack(spacing: 14) {
-                            Button { library.gallery = true } label: { Label("概览", systemImage: "square.grid.2x2") }
-                            Spacer()
-                            Text(library.current?.url.lastPathComponent ?? "").lineLimit(1).font(.callout)
-                            Spacer()
-                            Button { library.pinned.toggle() } label: { Image(systemName: library.pinned ? "pin.fill" : "pin") }.help("置顶")
-                            Button { library.showInfo.toggle() } label: { Image(systemName: "info.circle") }.help("图片信息")
-                        }
-                        .padding(.leading, 80).padding(.trailing, 16).frame(height: 44)
-                        .background(InteractiveGlass { Color.clear })
-                        .opacity(revealControls ? 1 : 0)
-                        .allowsHitTesting(revealControls)
-                        Color.clear.frame(height: 16)
-                    }.contentShape(Rectangle()).onHover { revealControls = $0 }
-                }
-            }
+            .ignoresSafeArea(.container, edges: [])
             .overlay(alignment: .bottom) {
                 if immersive {
                     HoverCaption(library: library)
@@ -96,15 +78,27 @@ struct Viewer: View {
                 ControlGroup {
                     Button("上一张", systemImage: "arrow.left") { library.move(-1) }
                     Button("下一张", systemImage: "arrow.right") { library.move(1) }
+                    Button("上一个文件夹", systemImage: "folder.badge.arrow.backward") { library.moveFolder(-1) }
+                    Button("下一个文件夹", systemImage: "folder.badge.arrow.forward") { library.moveFolder(1) }
                     Button("放大", systemImage: "plus.magnifyingglass") { library.zoom("in") }
                     Button("缩小", systemImage: "minus.magnifyingglass") { library.zoom("out") }
-                    Button("概览", systemImage: "square.grid.2x2") { library.gallery = true }
+                    Button("收藏", systemImage: "star") { library.toggleFavorite() }
+                    Button("导航栏", systemImage: "sidebar.left") { library.showNavigation.toggle() }
                 }.controlGroupStyle(.palette)
                 Divider()
                 Button("显示检查器", systemImage: "info.circle") { library.showInfo.toggle() }.keyboardShortcut("i")
                 Button("拷贝", systemImage: "doc.on.doc") { library.copyFile() }.keyboardShortcut("c")
                 Button("拷贝到文件夹…", systemImage: "folder.badge.plus") { library.transferFile(move: false) }.keyboardShortcut("c", modifiers: [.command, .shift])
-                Button("移动到文件夹…", systemImage: "folder") { library.transferFile(move: true) }.keyboardShortcut("m", modifiers: [.command, .shift])
+                Menu("移动", systemImage: "folder") {
+                    Button(library.favorites.contains(library.current?.url.path ?? "") ? "取消收藏" : "收藏", systemImage: "star") { library.toggleFavorite() }
+                    Divider()
+                    Button("移动到文件夹…") { library.transferFile(move: true) }.keyboardShortcut("m", modifiers: [.command, .shift])
+                    ForEach(library.destinations, id: \.self) { folder in
+                        Button(folder.lastPathComponent) { library.transferFile(to: folder, move: true) }
+                    }
+                    Divider()
+                    Button("添加文件夹…", systemImage: "plus") { library.addDestination() }
+                }
                 if let photo = library.current {
                     Button("在 Finder 中显示", systemImage: "folder") { NSWorkspace.shared.activateFileViewerSelecting([photo.url]) }
                 }
@@ -116,6 +110,13 @@ struct Viewer: View {
                 Menu("显示模式") {
                     Button("单图") { library.gallery = false }
                     Button("瀑布流") { library.gallery = true }
+                    Button("单列") { library.columns = 1; library.gallery = true }
+                }
+                Menu("调整窗口") {
+                    Toggle("随图片自动调整", isOn: $library.autoSize)
+                    Button("适合图片大小") { library.autoSize = true; library.zoom("fit") }
+                    Button("进入 / 退出全屏") { NSApp.keyWindow?.toggleFullScreen(nil) }
+                    Toggle("窗口置顶", isOn: $library.pinned)
                 }
                 Menu("图片尺寸") {
                     Button("适应窗口") { library.zoom("fit") }.keyboardShortcut("0")
@@ -123,6 +124,29 @@ struct Viewer: View {
                     Button("放大") { library.zoom("in") }
                     Button("缩小") { library.zoom("out") }
                 }
+                if let photo = library.current {
+                    Menu("打开方式…") {
+                        ForEach(NSWorkspace.shared.urlsForApplications(toOpen: photo.url), id: \.self) { app in
+                            Button(app.deletingPathExtension().lastPathComponent) {
+                                NSWorkspace.shared.open([photo.url], withApplicationAt: app, configuration: .init()) { _, error in
+                                    if let error { Task { @MainActor in library.error = error.localizedDescription } }
+                                }
+                            }
+                        }
+                    }
+                }
+                Divider()
+                Button("移到废纸篓", systemImage: "trash") { library.trashCurrent() }
+                Button("关闭", systemImage: "xmark") { NSApp.keyWindow?.performClose(nil) }
+            }
+            if library.showNavigation {
+                ScrollView {
+                    LazyVStack {
+                        ForEach(library.filtered) { photo in
+                            Thumbnail(photo: photo, width: 110).onTapGesture { library.choose(photo) }
+                        }
+                    }.padding(8)
+                }.frame(width: 126)
             }
             if library.showInfo, let photo = library.current {
                 Divider()
@@ -141,33 +165,28 @@ struct Viewer: View {
             }
         }
         .dropDestination(for: URL.self) { urls, _ in library.open(urls); return !urls.isEmpty } isTargeted: { targeted = $0 }
-        .toolbar {
-            ToolbarItem(placement: .navigation) {
-                Button(action: library.openPanel) { Label("打开", systemImage: "folder") }.help("打开图片或文件夹（⌘O）")
-            }
-            ToolbarItem {
-                Picker("浏览模式", selection: $library.gallery) {
-                    Image(systemName: "photo").tag(false)
-                    Image(systemName: "square.grid.2x2").tag(true)
-                }.pickerStyle(.segmented).frame(width: 88)
-            }
-            ToolbarItem {
-                if library.gallery {
-                    Stepper("\(library.columns) 列", value: $library.columns, in: 1...6).frame(width: 100)
-                }
-            }
-            ToolbarItem {
-                Button { library.pinned.toggle() } label: { Label("窗口置顶", systemImage: library.pinned ? "pin.fill" : "pin") }
-                    .tint(library.pinned ? .accentColor : nil).help("窗口置顶")
-            }
-            ToolbarItem {
-                Button { library.showInfo.toggle() } label: { Label("图片信息", systemImage: "info.circle") }.help("图片信息（⌘I）")
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if library.gallery && !library.photos.isEmpty {
+                HStack {
+                    TextField("搜索文件名", text: $library.query).textFieldStyle(.roundedBorder)
+                    Stepper("\(library.columns) 列", value: $library.columns, in: 1...6).fixedSize()
+                }.padding(8)
             }
         }
-        .searchable(text: $library.query, placement: .toolbar, prompt: "搜索文件名")
-        .toolbarVisibility(immersive ? .hidden : .visible, for: .windowToolbar)
-        .background(WindowConfiguration(pinned: library.pinned, immersive: immersive, revealControls: revealControls))
-        .onChange(of: library.gallery) { revealControls = false }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                compactToolbar
+                    .labelStyle(.iconOnly).buttonStyle(.plain).controlSize(.small)
+                    .padding(.horizontal, 8)
+            }
+            .padding(.leading, 78)
+            .frame(height: 36)
+            .background(.bar)
+            .overlay(alignment: .leading) { WindowButtons().frame(width: 78, height: 36) }
+        }
+        .ignoresSafeArea(.container, edges: .top)
+        .toolbarVisibility(.hidden, for: .windowToolbar)
+        .background(ImageWindowConfiguration(library: library))
         .alert("图片操作", isPresented: Binding(get: { library.error != nil }, set: { if !$0 { library.error = nil } })) {
             Button("好") { library.error = nil }
         } message: { Text(library.error ?? "") }
@@ -183,23 +202,27 @@ struct Viewer: View {
         }.padding(40)
     }
 
-    private var controls: some View {
-        InteractiveGlass {
-            HStack(spacing: 18) {
-                Button { library.move(-1) } label: { Image(systemName: "chevron.left") }.help("上一张（←）")
-                Text(library.position).font(.system(.callout, design: .monospaced)).monospacedDigit().frame(minWidth: 65)
-                Button { library.move(1) } label: { Image(systemName: "chevron.right") }.help("下一张（→）")
-                if !library.gallery {
-                    Divider().frame(height: 18)
-                    Button { library.zoom("out") } label: { Image(systemName: "minus.magnifyingglass") }.help("缩小")
-                    Button("适应") { library.zoom("fit") }.help("适应窗口（⌘0）")
-                    Button("1:1") { library.zoom("actual") }.help("实际像素（⌘1）")
-                    Button { library.zoom("in") } label: { Image(systemName: "plus.magnifyingglass") }.help("放大")
-                    Button { library.rotation = (library.rotation + 90) % 360 } label: { Image(systemName: "rotate.right") }.help("旋转预览（⌘R）")
-                }
-            }.buttonStyle(.plain).padding(.horizontal, 22).padding(.vertical, 14)
-        }.frame(width: library.gallery ? 210 : 510, height: 48)
+    private var compactToolbar: some View {
+        HStack(spacing: 10) {
+            Text(library.current?.url.lastPathComponent ?? "果果看").lineLimit(1).truncationMode(.middle).frame(width: 85)
+            Button("打开", systemImage: "folder") { library.openPanel() }.help("打开（⌘O）")
+            Button("上一张", systemImage: "arrow.left") { library.move(-1) }.help("上一张（↑）")
+            Button("下一张", systemImage: "arrow.right") { library.move(1) }.help("下一张（↓）")
+            Divider().frame(height: 14)
+            Button("单图", systemImage: "square") { library.gallery = false }
+            Button("瀑布流", systemImage: "square.grid.2x2") { library.columns = 3; library.gallery = true }
+            Button("单列", systemImage: "rectangle.split.1x2") { library.columns = 1; library.gallery = true }
+            Divider().frame(height: 14)
+            Button("放大", systemImage: "plus.magnifyingglass") { library.zoom("in") }
+            Button("缩小", systemImage: "minus.magnifyingglass") { library.zoom("out") }
+            Button("旋转", systemImage: "rotate.right") { library.rotation = (library.rotation + 90) % 360 }
+            Button("适合图片大小", systemImage: "viewfinder") { library.autoSize = true; library.zoom("fit") }
+            Button("检查器", systemImage: "info.circle") { library.showInfo.toggle() }
+            Button("导航栏", systemImage: "sidebar.left") { library.showNavigation.toggle() }
+            Button("置顶", systemImage: library.pinned ? "pin.fill" : "pin") { library.pinned.toggle() }
+        }.font(.system(size: 13)).fixedSize()
     }
+
 
     private func inspector(_ photo: Photo) -> some View {
         ScrollView {
@@ -293,40 +316,6 @@ struct Thumbnail: View {
     }
 }
 
-struct InteractiveGlass<Content: View>: NSViewRepresentable {
-    @ViewBuilder var content: () -> Content
-    func makeNSView(context: Context) -> NSGlassEffectView {
-        let glass = NSGlassEffectView()
-        glass.cornerRadius = 24
-        glass.effectIsInteractive = true
-        glass.contentView = NSHostingView(rootView: content())
-        return glass
-    }
-    func updateNSView(_ view: NSGlassEffectView, context: Context) {
-        (view.contentView as? NSHostingView<Content>)?.rootView = content()
-    }
-}
-
-struct WindowConfiguration: NSViewRepresentable {
-    let pinned: Bool
-    let immersive: Bool
-    let revealControls: Bool
-    func makeNSView(context: Context) -> NSView { NSView() }
-    func updateNSView(_ view: NSView, context: Context) {
-        DispatchQueue.main.async {
-            view.window?.level = pinned ? .floating : .normal
-            view.window?.titleVisibility = immersive ? .hidden : .visible
-            view.window?.titlebarAppearsTransparent = immersive
-            if immersive { view.window?.styleMask.insert(.fullSizeContentView) }
-            else { view.window?.styleMask.remove(.fullSizeContentView) }
-            for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
-                view.window?.standardWindowButton(button)?.isHidden = immersive && !revealControls
-            }
-            view.window?.autorecalculatesKeyViewLoop = true
-            view.window?.setFrameAutosaveName("GuoguoKan.Main")
-        }
-    }
-}
 
 struct HoverCaption: View {
     @Bindable var library: Library

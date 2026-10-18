@@ -30,6 +30,22 @@ struct Photo: Identifiable, Sendable {
 }
 
 enum Catalog {
+    static func adjacentFolder(to folder: URL, direction: Int) throws -> [Photo]? {
+        let folder = folder.resolvingSymlinksInPath().standardizedFileURL
+        let siblings = try FileManager.default.contentsOfDirectory(at: folder.deletingLastPathComponent(), includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])
+            .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
+            .map { $0.resolvingSymlinksInPath().standardizedFileURL }
+            .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+        guard let index = siblings.firstIndex(of: folder), direction != 0 else { return nil }
+        var next = index + (direction > 0 ? 1 : -1)
+        while siblings.indices.contains(next) {
+            let photos = try scan([siblings[next]])
+            if !photos.isEmpty { return photos }
+            next += direction > 0 ? 1 : -1
+        }
+        return nil
+    }
+
     static func scan(_ urls: [URL]) throws -> [Photo] {
         let manager = FileManager.default
         var files = Set<URL>()
@@ -96,6 +112,10 @@ final class Library {
     var columns = 3
     var showInfo = false
     var pinned = false
+    var autoSize = true
+    var showNavigation = false
+    var destinations: [URL] = (UserDefaults.standard.stringArray(forKey: "destinations") ?? []).map { URL(fileURLWithPath: $0) }
+    var favorites: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "favorites") ?? [])
     var fileStatus: String?
     var rotation = 0
     var zoomCommand = 0
@@ -157,6 +177,64 @@ final class Library {
     }
     func zoom(_ action: String) { zoomAction = action; zoomCommand += 1 }
 
+    func moveFolder(_ direction: Int) {
+        guard !busy, let folder = current?.url.deletingLastPathComponent() else { return }
+        busy = true
+        let token = UUID()
+        request = token
+        Task {
+            defer { if request == token { busy = false } }
+            do {
+                let found = try await Task.detached { try Catalog.adjacentFolder(to: folder, direction: direction) }.value
+                guard request == token else { return }
+                guard let found else { fileStatus = "没有更多包含图片的同级文件夹"; return }
+                photos = found
+                selected = found.first?.url
+                query = ""
+                rotation = 0
+                fileStatus = found.first?.url.deletingLastPathComponent().lastPathComponent
+            } catch { if request == token { self.error = error.localizedDescription } }
+        }
+    }
+
+    func toggleFavorite() {
+        guard let path = current?.url.path else { return }
+        if favorites.contains(path) { favorites.remove(path) } else { favorites.insert(path) }
+        UserDefaults.standard.set(Array(favorites), forKey: "favorites")
+    }
+
+    func addDestination() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.prompt = "添加文件夹"
+        if panel.runModal() == .OK, let folder = panel.url { rememberDestination(folder) }
+    }
+
+    private func rememberDestination(_ folder: URL) {
+        destinations.removeAll { $0 == folder }
+        destinations.insert(folder, at: 0)
+        destinations = Array(destinations.prefix(8))
+        UserDefaults.standard.set(destinations.map(\.path), forKey: "destinations")
+    }
+
+    func trashCurrent() {
+        guard !busy, let photo = current else { return }
+        let alert = NSAlert()
+        alert.messageText = "将这张图片移到废纸篓？"
+        alert.informativeText = photo.url.lastPathComponent
+        alert.addButton(withTitle: "移到废纸篓")
+        alert.addButton(withTitle: "取消")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        do {
+            try FileManager.default.trashItem(at: photo.url, resultingItemURL: nil)
+            let index = photos.firstIndex(where: { $0.url == photo.url }) ?? 0
+            photos.removeAll { $0.url == photo.url }
+            selected = photos.isEmpty ? nil : photos[min(index, photos.count - 1)].url
+            rotation = 0
+        } catch { self.error = error.localizedDescription }
+    }
+
     func copyFile(_ photo: Photo? = nil) {
         if photo == nil, let editor = NSApp.keyWindow?.firstResponder as? NSTextView {
             editor.copy(nil)
@@ -179,6 +257,12 @@ final class Library {
         panel.prompt = move ? "移动到这里" : "拷贝到这里"
         panel.message = "选择“\(photo.url.lastPathComponent)”的目标文件夹。同名文件不会被覆盖。"
         guard panel.runModal() == .OK, let folder = panel.url else { return }
+        transferFile(photo, to: folder, move: move)
+    }
+
+    func transferFile(_ photo: Photo? = nil, to folder: URL, move: Bool) {
+        guard !busy, let photo = photo ?? current else { return }
+        rememberDestination(folder)
         busy = true
         let token = request
         Task {

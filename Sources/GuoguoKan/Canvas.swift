@@ -17,15 +17,18 @@ struct Canvas: NSViewRepresentable {
     let command: Int
     let action: String
     var navigate: (Int) -> Void
+    var navigateFolder: (Int) -> Void
 
     func makeNSView(context: Context) -> PhotoScrollView {
         let view = PhotoScrollView()
         view.navigate = navigate
+        view.navigateFolder = navigateFolder
         view.load(photo)
         return view
     }
     func updateNSView(_ view: PhotoScrollView, context: Context) {
         view.navigate = navigate
+        view.navigateFolder = navigateFolder
         if view.loadedURL != photo.url { view.load(photo) }
         if view.rotation != rotation { view.rotation = rotation; view.render() }
         if view.lastCommand != command { view.lastCommand = command; view.apply(action) }
@@ -47,6 +50,7 @@ final class PhotoScrollView: NSScrollView {
     private var heldMagnification: CGFloat?
     private var heldFitting = false
     var navigate: ((Int) -> Void)?
+    var navigateFolder: ((Int) -> Void)?
     var rotation = 0
     var lastCommand = 0
 
@@ -161,14 +165,15 @@ final class PhotoScrollView: NSScrollView {
         if event.phase.contains(.ended) || event.phase.contains(.cancelled) { gestureNavigated = false; return }
         if !event.phase.isEmpty && gestureNavigated { return }
         if event.timestamp - lastScrollTime > 0.3 { wheelDelta = 0 }
-        wheelDelta += event.scrollingDeltaY
+        let horizontal = abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY)
+        wheelDelta += horizontal ? event.scrollingDeltaX : event.scrollingDeltaY
         let threshold: CGFloat = event.hasPreciseScrollingDeltas ? 35 : 1
         if abs(wheelDelta) >= threshold && event.timestamp - lastScrollTime > 0.22 {
             lastScrollTime = event.timestamp
             let direction = wheelDelta < 0 ? 1 : -1
             wheelDelta = 0
             gestureNavigated = true
-            navigate?(direction)
+            if horizontal { navigateFolder?(direction) } else { navigate?(direction) }
         }
     }
     @objc private func pressZoom(_ recognizer: NSPressGestureRecognizer) {
