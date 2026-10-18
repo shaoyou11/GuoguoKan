@@ -174,19 +174,20 @@ struct Viewer: View {
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) {
-            HStack(spacing: 0) {
-                WindowButtons().frame(width: 78, height: 36)
             ScrollView(.horizontal, showsIndicators: false) {
                 compactToolbar
                     .labelStyle(.iconOnly).buttonStyle(.plain).controlSize(.small)
                     .padding(.horizontal, 8)
             }
-            }
-            .frame(height: 36)
+            .frame(height: 28)
             .background(.bar)
         }
-        .ignoresSafeArea(.container, edges: .top)
-        .toolbarVisibility(.hidden, for: .windowToolbar)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Text(library.position).font(.caption).monospacedDigit()
+            }
+        }
+        .toolbarVisibility(.visible, for: .windowToolbar)
         .background(ImageWindowConfiguration(library: library))
         .alert("图片操作", isPresented: Binding(get: { library.error != nil }, set: { if !$0 { library.error = nil } })) {
             Button("好") { library.error = nil }
@@ -205,7 +206,6 @@ struct Viewer: View {
 
     private var compactToolbar: some View {
         HStack(spacing: 10) {
-            Text(library.current?.url.lastPathComponent ?? "果果看").lineLimit(1).truncationMode(.middle).frame(width: 85)
             Button("打开", systemImage: "folder") { library.openPanel() }.help("打开（⌘O）")
             Button("上一张", systemImage: "arrow.left") { library.move(-1) }.help("上一张（↑）")
             Button("下一张", systemImage: "arrow.right") { library.move(1) }.help("下一张（↓）")

@@ -9,7 +9,6 @@ enum ImageWindowGeometry {
         return CGSize(width: max(240, width * ratio + sidebar), height: max(200, height * ratio))
     }
 }
-
 struct ImageWindowConfiguration: NSViewRepresentable {
     @Bindable var library: Library
     final class Coordinator {
@@ -30,18 +29,12 @@ struct ImageWindowConfiguration: NSViewRepresentable {
             guard let window = view.window else { return }
             window.level = pinned ? .floating : .normal
             window.title = photo?.url.lastPathComponent ?? "果果看"
-            window.titleVisibility = .hidden
-            window.titlebarAppearsTransparent = true
-            window.styleMask.insert(.fullSizeContentView)
-            for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
-                window.standardWindowButton(button)?.isHidden = true
-            }
             guard key != coordinator.key else { return }
             coordinator.key = key
             guard autoSize, !gallery, let photo, !window.styleMask.contains(.fullScreen),
                   let screen = window.screen else { return }
             let visible = screen.visibleFrame.insetBy(dx: 12, dy: 12)
-            let chrome: CGFloat = 36
+            let chrome = window.frame.height - window.contentLayoutRect.height + 28
             let swapped = rotation == 90 || rotation == 270
             let image = CGSize(width: swapped ? photo.height : photo.width, height: swapped ? photo.width : photo.height)
             let size = ImageWindowGeometry.contentSize(image: image,
@@ -53,32 +46,4 @@ struct ImageWindowConfiguration: NSViewRepresentable {
             window.setFrame(CGRect(origin: origin, size: frameSize), display: true)
         }
     }
-}
-
-struct WindowButtons: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView { WindowButtonHost() }
-    func updateNSView(_ view: NSView, context: Context) {}
-}
-
-final class WindowButtonHost: NSView {
-    override init(frame: NSRect) {
-        super.init(frame: frame)
-        for (index, type) in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton].enumerated() {
-            guard let button = NSWindow.standardWindowButton(type, for: [.titled, .closable, .miniaturizable, .resizable]) else { continue }
-            button.frame.origin = CGPoint(x: 12 + index * 20, y: 11)
-            button.target = self
-            button.tag = index
-            button.action = #selector(performWindowAction(_:))
-            addSubview(button)
-        }
-    }
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-    @objc private func performWindowAction(_ sender: NSButton) {
-        switch sender.tag {
-        case 0: window?.performClose(nil)
-        case 1: window?.miniaturize(nil)
-        default: window?.toggleFullScreen(nil)
-        }
-    }
-    override func mouseDown(with event: NSEvent) { window?.performDrag(with: event) }
 }
