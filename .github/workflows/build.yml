@@ -37,16 +37,16 @@ jobs:
       - name: 验证压缩包
         shell: bash
         run: |
-          ditto -x -k 交付/*.zip "$RUNNER_TEMP/verify"
+          ditto -x -k 交付/GuoguoKan-*.zip "$RUNNER_TEMP/verify"
           codesign --verify --deep --strict "$RUNNER_TEMP/verify/果果看.app"
           test "$(lipo -archs "$RUNNER_TEMP/verify/果果看.app/Contents/MacOS/GuoguoKan")" = arm64
           cd 交付
-          shasum -a 256 *.zip > SHA256SUMS.txt
+          shasum -a 256 GuoguoKan-*.zip > SHA256SUMS.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: GuoguoKan-arm64
           path: |
-            交付/*.zip
+            交付/GuoguoKan-*.zip
             交付/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 30
@@ -55,4 +55,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" 交付/*.zip 交付/SHA256SUMS.txt --verify-tag --title "果果看 $GITHUB_REF_NAME" --notes "Apple Silicon · macOS 27+。自动编译并通过测试。使用 ad-hoc 签名，尚未完成 Developer ID 公证。"
+          gh release create "$GITHUB_REF_NAME" 交付/GuoguoKan-*.zip 交付/SHA256SUMS.txt --verify-tag --title "果果看 $GITHUB_REF_NAME" --notes "Apple Silicon · macOS 27+。自动编译并通过测试。使用 ad-hoc 签名，尚未完成 Developer ID 公证。"
