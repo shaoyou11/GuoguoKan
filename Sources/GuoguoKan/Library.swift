@@ -3,6 +3,22 @@ import ImageIO
 import Observation
 import UniformTypeIdentifiers
 
+enum PhotoFileOperation {
+    static func transfer(_ source: URL, to folder: URL, move: Bool) throws -> URL {
+        let source = source.resolvingSymlinksInPath().standardizedFileURL
+        let destination = folder.appendingPathComponent(source.lastPathComponent).resolvingSymlinksInPath().standardizedFileURL
+        guard source != destination else {
+            throw NSError(domain: "GuoguoKan", code: 1, userInfo: [NSLocalizedDescriptionKey: "图片已经在这个文件夹中。"])
+        }
+        guard !FileManager.default.fileExists(atPath: destination.path) else {
+            throw NSError(domain: "GuoguoKan", code: 2, userInfo: [NSLocalizedDescriptionKey: "目标文件夹中已有同名文件，未覆盖任何文件。"])
+        }
+        if move { try FileManager.default.moveItem(at: source, to: destination) }
+        else { try FileManager.default.copyItem(at: source, to: destination) }
+        return destination
+    }
+}
+
 struct Photo: Identifiable, Sendable {
     var id: URL { url }
     let url: URL
@@ -80,6 +96,7 @@ final class Library {
     var columns = 3
     var showInfo = false
     var pinned = false
+    var fileStatus: String?
     var rotation = 0
     var zoomCommand = 0
     var zoomAction = "fit"
@@ -139,4 +156,51 @@ final class Library {
         rotation = 0
     }
     func zoom(_ action: String) { zoomAction = action; zoomCommand += 1 }
+
+    func copyFile(_ photo: Photo? = nil) {
+        if photo == nil, let editor = NSApp.keyWindow?.firstResponder as? NSTextView {
+            editor.copy(nil)
+            return
+        }
+        guard let photo = photo ?? current else { return }
+        NSPasteboard.general.clearContents()
+        if NSPasteboard.general.writeObjects([photo.url as NSURL]) {
+            fileStatus = "已拷贝，可在 Finder 中粘贴"
+        }
+    }
+
+    func transferFile(_ photo: Photo? = nil, move: Bool) {
+        guard !busy, let photo = photo ?? current else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = move ? "移动到这里" : "拷贝到这里"
+        panel.message = "选择“\(photo.url.lastPathComponent)”的目标文件夹。同名文件不会被覆盖。"
+        guard panel.runModal() == .OK, let folder = panel.url else { return }
+        busy = true
+        let token = request
+        Task {
+            do {
+                _ = try await Task.detached(priority: .userInitiated) {
+                    try PhotoFileOperation.transfer(photo.url, to: folder, move: move)
+                }.value
+                guard request == token else { return }
+                if move, let index = photos.firstIndex(where: { $0.url == photo.url }) {
+                    photos.remove(at: index)
+                    if selected == photo.url {
+                        selected = photos.isEmpty ? nil : photos[min(index, photos.count - 1)].url
+                        rotation = 0
+                    }
+                }
+                busy = false
+                fileStatus = move ? "图片已移动" : "图片已拷贝"
+            } catch {
+                guard request == token else { return }
+                busy = false
+                self.error = error.localizedDescription
+            }
+        }
+    }
 }

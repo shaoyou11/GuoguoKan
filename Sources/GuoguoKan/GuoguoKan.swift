@@ -14,13 +14,21 @@ struct GuoguoKanApp: App {
     var body: some Scene {
         Window("果果看", id: "viewer") {
             Viewer(library: delegate.library)
-                .frame(minWidth: 780, minHeight: 520)
+                .frame(minWidth: 420, minHeight: 320)
         }
         .defaultSize(width: 1180, height: 780)
         .windowToolbarStyle(.unified)
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("打开图片或文件夹…") { delegate.library.openPanel() }.keyboardShortcut("o")
+            }
+            CommandMenu("图片文件") {
+                Button("拷贝") { delegate.library.copyFile() }.keyboardShortcut("c")
+                    .disabled(delegate.library.current == nil)
+                Button("拷贝到文件夹…") { delegate.library.transferFile(move: false) }.keyboardShortcut("c", modifiers: [.command, .shift])
+                    .disabled(delegate.library.current == nil || delegate.library.busy)
+                Button("移动到文件夹…") { delegate.library.transferFile(move: true) }.keyboardShortcut("m", modifiers: [.command, .shift])
+                    .disabled(delegate.library.current == nil || delegate.library.busy)
             }
             CommandMenu("看图") {
                 Button("上一张") { delegate.library.move(-1) }.keyboardShortcut(.leftArrow, modifiers: [])
@@ -41,6 +49,8 @@ struct GuoguoKanApp: App {
 struct Viewer: View {
     @Bindable var library: Library
     @State private var targeted = false
+    @State private var revealControls = false
+    private var immersive: Bool { !library.gallery && library.current != nil }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -51,16 +61,67 @@ struct Viewer: View {
                 } else if library.gallery {
                     Waterfall(library: library)
                 } else if let photo = library.current {
-                    Canvas(photo: photo, rotation: library.rotation, command: library.zoomCommand, action: library.zoomAction)
-                        .id(photo.id)
+                    Canvas(photo: photo, rotation: library.rotation, command: library.zoomCommand, action: library.zoomAction, navigate: library.move)
                 }
                 if library.busy {
-                    ProgressView("正在读取图片…").padding(24).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+                    ProgressView("正在处理…").padding(24).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
                 }
             }
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                if !library.photos.isEmpty {
-                    controls.padding(.bottom, 16).padding(.top, 8)
+            .ignoresSafeArea(.container, edges: immersive ? .top : [])
+            .overlay(alignment: .top) {
+                if immersive {
+                    VStack(spacing: 0) {
+                        HStack(spacing: 14) {
+                            Button { library.gallery = true } label: { Label("概览", systemImage: "square.grid.2x2") }
+                            Spacer()
+                            Text(library.current?.url.lastPathComponent ?? "").lineLimit(1).font(.callout)
+                            Spacer()
+                            Button { library.pinned.toggle() } label: { Image(systemName: library.pinned ? "pin.fill" : "pin") }.help("置顶")
+                            Button { library.showInfo.toggle() } label: { Image(systemName: "info.circle") }.help("图片信息")
+                        }
+                        .padding(.leading, 80).padding(.trailing, 16).frame(height: 44)
+                        .background(InteractiveGlass { Color.clear })
+                        .opacity(revealControls ? 1 : 0)
+                        .allowsHitTesting(revealControls)
+                        Color.clear.frame(height: 16)
+                    }.contentShape(Rectangle()).onHover { revealControls = $0 }
+                }
+            }
+            .overlay(alignment: .bottom) {
+                if immersive {
+                    HoverCaption(library: library)
+                }
+            }
+            .contextMenu {
+                ControlGroup {
+                    Button("上一张", systemImage: "arrow.left") { library.move(-1) }
+                    Button("下一张", systemImage: "arrow.right") { library.move(1) }
+                    Button("放大", systemImage: "plus.magnifyingglass") { library.zoom("in") }
+                    Button("缩小", systemImage: "minus.magnifyingglass") { library.zoom("out") }
+                    Button("概览", systemImage: "square.grid.2x2") { library.gallery = true }
+                }.controlGroupStyle(.palette)
+                Divider()
+                Button("显示检查器", systemImage: "info.circle") { library.showInfo.toggle() }.keyboardShortcut("i")
+                Button("拷贝", systemImage: "doc.on.doc") { library.copyFile() }.keyboardShortcut("c")
+                Button("拷贝到文件夹…", systemImage: "folder.badge.plus") { library.transferFile(move: false) }.keyboardShortcut("c", modifiers: [.command, .shift])
+                Button("移动到文件夹…", systemImage: "folder") { library.transferFile(move: true) }.keyboardShortcut("m", modifiers: [.command, .shift])
+                if let photo = library.current {
+                    Button("在 Finder 中显示", systemImage: "folder") { NSWorkspace.shared.activateFileViewerSelecting([photo.url]) }
+                }
+                Divider()
+                Menu("旋转图片") {
+                    Button("向右旋转") { library.rotation = (library.rotation + 90) % 360 }
+                    Button("向左旋转") { library.rotation = (library.rotation + 270) % 360 }
+                }
+                Menu("显示模式") {
+                    Button("单图") { library.gallery = false }
+                    Button("瀑布流") { library.gallery = true }
+                }
+                Menu("图片尺寸") {
+                    Button("适应窗口") { library.zoom("fit") }.keyboardShortcut("0")
+                    Button("实际像素") { library.zoom("actual") }.keyboardShortcut("1")
+                    Button("放大") { library.zoom("in") }
+                    Button("缩小") { library.zoom("out") }
                 }
             }
             if library.showInfo, let photo = library.current {
@@ -69,6 +130,16 @@ struct Viewer: View {
             }
         }
         .overlay { if targeted { RoundedRectangle(cornerRadius: 14).stroke(.tint, lineWidth: 3).padding(8).allowsHitTesting(false) } }
+        .overlay(alignment: .bottom) {
+            if let status = library.fileStatus {
+                Text(status).font(.callout).padding(12).background(.regularMaterial, in: Capsule()).padding(.bottom, 56)
+                    .task(id: status) {
+                        try? await Task.sleep(for: .seconds(3))
+                        if !Task.isCancelled { library.fileStatus = nil }
+                    }
+                    .allowsHitTesting(false)
+            }
+        }
         .dropDestination(for: URL.self) { urls, _ in library.open(urls); return !urls.isEmpty } isTargeted: { targeted = $0 }
         .toolbar {
             ToolbarItem(placement: .navigation) {
@@ -94,8 +165,10 @@ struct Viewer: View {
             }
         }
         .searchable(text: $library.query, placement: .toolbar, prompt: "搜索文件名")
-        .background(WindowConfiguration(pinned: library.pinned))
-        .alert("打开图片", isPresented: Binding(get: { library.error != nil }, set: { if !$0 { library.error = nil } })) {
+        .toolbarVisibility(immersive ? .hidden : .visible, for: .windowToolbar)
+        .background(WindowConfiguration(pinned: library.pinned, immersive: immersive, revealControls: revealControls))
+        .onChange(of: library.gallery) { revealControls = false }
+        .alert("图片操作", isPresented: Binding(get: { library.error != nil }, set: { if !$0 { library.error = nil } })) {
             Button("好") { library.error = nil }
         } message: { Text(library.error ?? "") }
     }
@@ -169,11 +242,20 @@ struct Waterfall: View {
                             LazyVStack(spacing: 14) {
                                 ForEach(photos) { photo in
                                     Thumbnail(photo: photo, width: max(60, (geometry.size.width - 40 - CGFloat(library.columns - 1) * 14) / CGFloat(library.columns)))
-                                        .onTapGesture { library.choose(photo) }
+                                        .onTapGesture(count: 2) { library.choose(photo) }
+                                        .onTapGesture { library.selected = photo.url }
+                                        .overlay {
+                                            RoundedRectangle(cornerRadius: 12)
+                                                .stroke(library.selected == photo.url ? Color.accentColor : .clear, lineWidth: 2)
+                                                .allowsHitTesting(false)
+                                        }
                                         .accessibilityAddTraits(.isButton)
                                         .accessibilityAction { library.choose(photo) }
                                         .contextMenu {
                                             Button("打开图片") { library.choose(photo) }
+                                            Button("拷贝") { library.copyFile(photo) }.keyboardShortcut("c")
+                                            Button("拷贝到文件夹…") { library.transferFile(photo, move: false) }.keyboardShortcut("c", modifiers: [.command, .shift])
+                                            Button("移动到文件夹…") { library.transferFile(photo, move: true) }.keyboardShortcut("m", modifiers: [.command, .shift])
                                             Button("在 Finder 中显示") { NSWorkspace.shared.activateFileViewerSelecting([photo.url]) }
                                         }
                                 }
@@ -197,9 +279,11 @@ struct Thumbnail: View {
                 RoundedRectangle(cornerRadius: 10).fill(.quaternary)
                 if let image { Image(decorative: image, scale: 1).resizable().scaledToFit() }
                 else { Image(systemName: failed ? "exclamationmark.triangle" : "photo").foregroundStyle(.secondary) }
-            }.frame(width: width, height: width / photo.ratio).clipShape(RoundedRectangle(cornerRadius: 10))
-            Text(photo.url.deletingPathExtension().lastPathComponent).font(.caption).lineLimit(1).foregroundStyle(.secondary)
-        }.frame(width: width).contentShape(Rectangle()).accessibilityLabel(photo.url.lastPathComponent)
+            }.frame(width: max(1, width - 12), height: max(1, width - 12) / photo.ratio).clipShape(RoundedRectangle(cornerRadius: 10))
+            Text("\(photo.url.lastPathComponent) (\(ByteCountFormatter.string(fromByteCount: Int64(photo.bytes), countStyle: .file)))")
+                .font(.caption).lineLimit(1).foregroundStyle(.secondary).frame(maxWidth: .infinity)
+        }.padding(6).background(.background, in: RoundedRectangle(cornerRadius: 12))
+        .frame(width: width).contentShape(Rectangle()).accessibilityLabel(photo.url.lastPathComponent)
         .task(id: Int(width)) {
             let loaded = await ImageLoader.shared.image(photo.url, pixels: min(1800, max(300, Int(width * 2))))
             guard !Task.isCancelled else { return }
@@ -225,12 +309,42 @@ struct InteractiveGlass<Content: View>: NSViewRepresentable {
 
 struct WindowConfiguration: NSViewRepresentable {
     let pinned: Bool
+    let immersive: Bool
+    let revealControls: Bool
     func makeNSView(context: Context) -> NSView { NSView() }
     func updateNSView(_ view: NSView, context: Context) {
         DispatchQueue.main.async {
             view.window?.level = pinned ? .floating : .normal
+            view.window?.titleVisibility = immersive ? .hidden : .visible
+            view.window?.titlebarAppearsTransparent = immersive
+            if immersive { view.window?.styleMask.insert(.fullSizeContentView) }
+            else { view.window?.styleMask.remove(.fullSizeContentView) }
+            for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+                view.window?.standardWindowButton(button)?.isHidden = immersive && !revealControls
+            }
             view.window?.autorecalculatesKeyViewLoop = true
             view.window?.setFrameAutosaveName("GuoguoKan.Main")
         }
+    }
+}
+
+struct HoverCaption: View {
+    @Bindable var library: Library
+    @State private var hovering = false
+    var body: some View {
+        HStack {
+            Button { library.move(-1) } label: { Image(systemName: "chevron.left") }.help("上一张")
+            Spacer()
+            if let photo = library.current {
+                Text("\(photo.url.lastPathComponent) · \(photo.width) × \(photo.height) · \(library.position)")
+                    .font(.caption).lineLimit(1)
+            }
+            Spacer()
+            Button { library.move(1) } label: { Image(systemName: "chevron.right") }.help("下一张")
+        }.buttonStyle(.plain).padding(16).frame(height: 48)
+        .background(.regularMaterial)
+        .opacity(hovering ? 1 : 0)
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
     }
 }

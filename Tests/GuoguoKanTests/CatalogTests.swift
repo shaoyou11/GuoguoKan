@@ -4,6 +4,47 @@ import UniformTypeIdentifiers
 @testable import GuoguoKan
 
 final class CatalogTests: XCTestCase {
+    func testCopyPreservesSourceAndContents() throws {
+        let sourceFolder = try fixtureFolder()
+        let destination = try fixtureFolder()
+        let source = sourceFolder.appendingPathComponent("photo.tiff")
+        try makeImage(source)
+        let original = try Data(contentsOf: source)
+        let copied = try PhotoFileOperation.transfer(source, to: destination, move: false)
+        XCTAssertEqual(try Data(contentsOf: source), original)
+        XCTAssertEqual(try Data(contentsOf: copied), original)
+    }
+
+    func testMovePreservesBytesAndRemovesOnlySource() throws {
+        let sourceFolder = try fixtureFolder()
+        let destination = try fixtureFolder()
+        let source = sourceFolder.appendingPathComponent("photo.tiff")
+        let untouched = sourceFolder.appendingPathComponent("keep.tiff")
+        try makeImage(source)
+        try makeImage(untouched)
+        let original = try Data(contentsOf: source)
+        let moved = try PhotoFileOperation.transfer(source, to: destination, move: true)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: source.path))
+        XCTAssertEqual(try Data(contentsOf: moved), original)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: untouched.path))
+    }
+
+    func testTransferRejectsCollisionAndSameFolder() throws {
+        let sourceFolder = try fixtureFolder()
+        let destination = try fixtureFolder()
+        let source = sourceFolder.appendingPathComponent("photo.tiff")
+        let existing = destination.appendingPathComponent("photo.tiff")
+        try makeImage(source)
+        let sentinel = Data("existing".utf8)
+        try sentinel.write(to: existing)
+        for move in [false, true] {
+            XCTAssertThrowsError(try PhotoFileOperation.transfer(source, to: destination, move: move))
+            XCTAssertThrowsError(try PhotoFileOperation.transfer(source, to: sourceFolder, move: move))
+        }
+        XCTAssertEqual(try Data(contentsOf: existing), sentinel)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: source.path))
+    }
+
     private func fixtureFolder() throws -> URL {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("GuoguoKanTests-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)

@@ -16,13 +16,17 @@ struct Canvas: NSViewRepresentable {
     let rotation: Int
     let command: Int
     let action: String
+    var navigate: (Int) -> Void
 
     func makeNSView(context: Context) -> PhotoScrollView {
         let view = PhotoScrollView()
+        view.navigate = navigate
         view.load(photo)
         return view
     }
     func updateNSView(_ view: PhotoScrollView, context: Context) {
+        view.navigate = navigate
+        if view.loadedURL != photo.url { view.load(photo) }
         if view.rotation != rotation { view.rotation = rotation; view.render() }
         if view.lastCommand != command { view.lastCommand = command; view.apply(action) }
     }
@@ -36,6 +40,13 @@ final class PhotoScrollView: NSScrollView {
     private var task: Task<Void, Never>?
     private var originalSize = NSSize(width: 1, height: 1)
     private var fitting = true
+    private var lastScrollTime: TimeInterval = 0
+    private var wheelDelta: CGFloat = 0
+    private var gestureNavigated = false
+    private(set) var loadedURL: URL?
+    private var heldMagnification: CGFloat?
+    private var heldFitting = false
+    var navigate: ((Int) -> Void)?
     var rotation = 0
     var lastCommand = 0
 
@@ -62,10 +73,17 @@ final class PhotoScrollView: NSScrollView {
         let pan = NSPanGestureRecognizer(target: self, action: #selector(drag(_:)))
         picture.addGestureRecognizer(pan)
         pan.buttonMask = 1
+        let press = NSPressGestureRecognizer(target: self, action: #selector(pressZoom(_:)))
+        press.minimumPressDuration = 0.35
+        picture.addGestureRecognizer(press)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     func load(_ photo: Photo) {
+        loadedURL = photo.url
+        decoded = nil
+        picture.image = nil
+        status.stringValue = "正在加载…"
         originalSize = NSSize(width: photo.width, height: photo.height)
         task?.cancel()
         task = Task { [weak self] in
@@ -106,8 +124,11 @@ final class PhotoScrollView: NSScrollView {
     private func fit() {
         guard picture.frame.width > 0, picture.frame.height > 0, contentSize.width > 0 else { return }
         let ratio = min(contentSize.width / picture.frame.width, contentSize.height / picture.frame.height)
-        magnification = max(minMagnification, min(maxMagnification, ratio))
+        let target = max(minMagnification, min(maxMagnification, ratio))
+        if abs(magnification - target) > 0.0001 { magnification = target }
         fitting = true
+        hasVerticalScroller = false
+        hasHorizontalScroller = false
         center()
     }
 
@@ -120,6 +141,8 @@ final class PhotoScrollView: NSScrollView {
     func apply(_ action: String) {
         if action == "fit" { fit(); return }
         fitting = false
+        hasVerticalScroller = true
+        hasHorizontalScroller = true
         let scale = window?.backingScaleFactor ?? 2
         let fullPixels = rotation == 90 || rotation == 270 ? originalSize.height : originalSize.width
         let actual = fullPixels / max(picture.frame.width, 1) / scale
@@ -127,6 +150,40 @@ final class PhotoScrollView: NSScrollView {
         setMagnification(min(maxMagnification, max(minMagnification, next)), centeredAt: NSPoint(x: contentView.bounds.midX, y: contentView.bounds.midY))
     }
     override func magnify(with event: NSEvent) { fitting = false; super.magnify(with: event) }
+    override func scrollWheel(with event: NSEvent) {
+        if event.modifierFlags.contains(.command) || event.modifierFlags.contains(.shift) {
+            if abs(event.scrollingDeltaY) > 0 { apply(event.scrollingDeltaY > 0 ? "in" : "out") }
+            return
+        }
+        guard fitting else { super.scrollWheel(with: event); return }
+        guard event.momentumPhase.isEmpty else { return }
+        if event.phase.contains(.began) { gestureNavigated = false; wheelDelta = 0 }
+        if event.phase.contains(.ended) || event.phase.contains(.cancelled) { gestureNavigated = false; return }
+        if !event.phase.isEmpty && gestureNavigated { return }
+        if event.timestamp - lastScrollTime > 0.3 { wheelDelta = 0 }
+        wheelDelta += event.scrollingDeltaY
+        let threshold: CGFloat = event.hasPreciseScrollingDeltas ? 35 : 1
+        if abs(wheelDelta) >= threshold && event.timestamp - lastScrollTime > 0.22 {
+            lastScrollTime = event.timestamp
+            let direction = wheelDelta < 0 ? 1 : -1
+            wheelDelta = 0
+            gestureNavigated = true
+            navigate?(direction)
+        }
+    }
+    @objc private func pressZoom(_ recognizer: NSPressGestureRecognizer) {
+        if recognizer.state == .began {
+            heldMagnification = magnification
+            heldFitting = fitting
+            fitting = false
+            setMagnification(min(maxMagnification, magnification * 2), centeredAt: recognizer.location(in: picture))
+        } else if recognizer.state == .ended || recognizer.state == .cancelled || recognizer.state == .failed {
+            if let saved = heldMagnification { magnification = saved }
+            heldMagnification = nil
+            fitting = heldFitting
+            if fitting { fit() }
+        }
+    }
     @objc private func toggleFit() { fitting ? apply("actual") : fit() }
     @objc private func drag(_ recognizer: NSPanGestureRecognizer) {
         fitting = false
